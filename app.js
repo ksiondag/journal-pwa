@@ -5,6 +5,7 @@
   const DB_NAME = 'journal_db';
   const DB_VER = 1;
   const STORE = 'pages';
+  const PAGE_W = 560; // reference page width; dot spacing scales proportionally with this
 
   let db = null;
   let currentPage = 0;   // in spread mode, always even-indexed (right-side page)
@@ -40,6 +41,7 @@
   const ctxLeft = canvasLeft.getContext('2d');
   const svgLinesLeft = document.getElementById('page-lines-left');
   const pageLeft = document.getElementById('page-left');
+  const cursorRing = document.getElementById('cursor-ring');
 
   // ── IndexedDB ───────────────────────────────────────────
   function openDB() {
@@ -92,13 +94,43 @@
     journalBook.style.transform = (viewScale === 1 && viewRotation === 0)
       ? ''
       : `rotate(${viewRotation}deg) scale(${viewScale})`;
+    updateCursorSize();
   }
 
   function resetView() {
     viewScale = 1;
     viewRotation = 0;
     journalBook.style.transform = '';
+    updateCursorSize();
   }
+
+  // ── Cursor ring ──────────────────────────────────────────
+  function updateCursorSize() {
+    let d;
+    if (tool === 'eraser') d = penSize * 8;
+    else if (tool === 'highlighter') d = penSize * 10;
+    else d = penSize;
+    d = Math.max(2, d * viewScale);
+    cursorRing.style.width = d + 'px';
+    cursorRing.style.height = d + 'px';
+  }
+
+  function attachCursorHandlers(targetCanvas) {
+    targetCanvas.addEventListener('pointermove', e => {
+      if (e.pointerType === 'touch') return;
+      cursorRing.style.display = 'block';
+      cursorRing.style.left = e.clientX + 'px';
+      cursorRing.style.top = e.clientY + 'px';
+      updateCursorSize();
+    });
+    targetCanvas.addEventListener('pointerleave', e => {
+      if (e.pointerType === 'touch') return;
+      cursorRing.style.display = 'none';
+    });
+  }
+
+  attachCursorHandlers(canvas);
+  attachCursorHandlers(canvasLeft);
 
   // ── Canvas setup ────────────────────────────────────────
   function setupCanvas(targetCanvas, targetCtx, targetContainer, targetSvg) {
@@ -124,12 +156,15 @@
     svgEl.style.width = w + 'px';
     svgEl.style.height = h + 'px';
 
-    const gap = 30;
-    const marginTop = 40;
-    const marginLeft = 30;
+    // Scale dot spacing with page width so dots stay aligned with
+    // canvas content when the page is resized (zoom in/out on paper effect).
+    const scale = w / PAGE_W;
+    const gap = 30 * scale;
+    const marginLeft = 30 * scale;
+    const marginTop = 40 * scale;
 
-    for (let y = marginTop; y < h - 16; y += gap) {
-      for (let x = marginLeft; x < w - 16; x += gap) {
+    for (let y = marginTop; y < h - marginTop; y += gap) {
+      for (let x = marginLeft; x < w - marginLeft; x += gap) {
         const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         dot.setAttribute('cx', x);
         dot.setAttribute('cy', y);
@@ -168,7 +203,7 @@
       const leftIdx = idx - 1;
       if (leftIdx >= 0) {
         canvasLeft.style.pointerEvents = 'auto';
-        canvasLeft.style.cursor = 'crosshair';
+        canvasLeft.style.cursor = 'none';
         await loadCanvasContent(ctxLeft, canvasLeft, pageLeft, leftIdx);
       } else {
         canvasLeft.style.pointerEvents = 'none';
@@ -415,6 +450,7 @@
     document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
     const btn = document.querySelector(`.tool-btn[data-tool="${t}"]`);
     if (btn) btn.classList.add('active');
+    updateCursorSize();
   }
 
   document.getElementById('btn-pen').dataset.tool = 'pen';
@@ -432,7 +468,7 @@
   });
   colorSwatch.style.background = penColor;
 
-  sizeSlider.addEventListener('input', () => { penSize = parseFloat(sizeSlider.value); });
+  sizeSlider.addEventListener('input', () => { penSize = parseFloat(sizeSlider.value); updateCursorSize(); });
 
   document.getElementById('btn-clear').addEventListener('click', async () => {
     const rect = pageContainer.getBoundingClientRect();

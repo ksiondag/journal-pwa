@@ -118,7 +118,18 @@ html, body {
   inset: 0;
   touch-action: none;
   z-index: 1;
-  cursor: crosshair;
+  cursor: none;
+}
+
+#cursor-ring {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.65);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.65);
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+  display: none;
 }
 
 #journal-book.spread {
@@ -167,7 +178,7 @@ html, body {
   inset: 0;
   touch-action: none;
   z-index: 1;
-  cursor: crosshair;
+  cursor: none;
 }
 
 /* page turn flash overlay */
