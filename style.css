@@ -87,6 +87,16 @@ html, body {
   border-right: 1px solid rgba(0,0,0,0.2);
   position: relative;
 }
+
+#journal-book.spine-right {
+  flex-direction: row-reverse;
+  border-radius: 8px 3px 3px 8px;
+}
+#journal-book.spine-right #spine {
+  background: linear-gradient(270deg, #4a3828 0%, var(--spine-hi) 45%, var(--spine) 100%);
+  border-right: none;
+  border-left: 1px solid rgba(0,0,0,0.2);
+}
 #spine::after {
   content: '';
   position: absolute;

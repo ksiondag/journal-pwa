@@ -112,8 +112,9 @@
 
   // ── Page load / save ────────────────────────────────────
   async function loadPage(idx) {
+    document.getElementById('journal-book').classList.toggle('spine-right', idx % 2 === 1);
+
     const rect = pageContainer.getBoundingClientRect();
-    ctx.clearRect(0, 0, rect.width, rect.height);
 
     let dataURL = pages[idx];
     if (!dataURL) {
