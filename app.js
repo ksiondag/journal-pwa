@@ -94,23 +94,20 @@
     svgLines.style.width = w + 'px';
     svgLines.style.height = h + 'px';
 
-    const lineGap = 30;
-    const marginTop = 50;
+    const gap = 30;
+    const marginTop = 40;
+    const marginLeft = 30;
 
-    for (let y = marginTop; y < h - 24; y += lineGap) {
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', '0'); line.setAttribute('x2', w);
-      line.setAttribute('y1', y); line.setAttribute('y2', y);
-      line.setAttribute('stroke', 'var(--line-blue)');
-      line.setAttribute('stroke-width', '0.8');
-      svgLines.appendChild(line);
+    for (let y = marginTop; y < h - 16; y += gap) {
+      for (let x = marginLeft; x < w - 16; x += gap) {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', x);
+        dot.setAttribute('cy', y);
+        dot.setAttribute('r', '1.2');
+        dot.setAttribute('fill', 'var(--line-blue)');
+        svgLines.appendChild(dot);
+      }
     }
-    const redLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    redLine.setAttribute('x1', '56'); redLine.setAttribute('x2', '56');
-    redLine.setAttribute('y1', '0'); redLine.setAttribute('y2', h);
-    redLine.setAttribute('stroke', 'var(--line-red)');
-    redLine.setAttribute('stroke-width', '1');
-    svgLines.appendChild(redLine);
   }
 
   // ── Page load / save ────────────────────────────────────
