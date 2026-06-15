@@ -45,6 +45,10 @@
     <button class="tool-btn" id="btn-clear" title="Clear page">
       <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
     </button>
+    <!-- Spread view -->
+    <button class="tool-btn" id="btn-spread" title="Spread view">
+      <svg viewBox="0 0 24 24"><rect x="2" y="3" width="9" height="18" rx="1"/><rect x="13" y="3" width="9" height="18" rx="1"/></svg>
+    </button>
     <!-- Pages strip -->
     <button class="tool-btn" id="btn-thumbs" title="All pages">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/></svg>
@@ -59,6 +63,10 @@
 
   <div id="journal-wrap">
     <div id="journal-book">
+      <div id="page-left">
+        <svg id="page-lines-left" xmlns="http://www.w3.org/2000/svg"></svg>
+        <canvas id="canvas-left"></canvas>
+      </div>
       <div id="spine"></div>
       <div id="page-container">
         <svg id="page-lines" xmlns="http://www.w3.org/2000/svg"></svg>

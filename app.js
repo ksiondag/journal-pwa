@@ -7,14 +7,13 @@
   const STORE = 'pages';
 
   let db = null;
-  let currentPage = 0;
-  let pages = {}; // cache: pageIndex -> dataURL
+  let currentPage = 0;   // in spread mode, always even-indexed (right-side page)
+  let pages = {};
   let tool = 'pen';
   let penColor = '#1a1a1a';
   let penSize = 2;
-  let isDrawing = false;
-  let lastX = 0, lastY = 0;
-  let pendingSave = null;
+  let spreadMode = false;
+  const pendingSaves = new Map(); // canvas el → timeoutId
   let thumbPanelOpen = false;
 
   // ── Elements ────────────────────────────────────────────
@@ -29,6 +28,11 @@
   const thumbPanel = document.getElementById('thumb-panel');
   const thumbList = document.getElementById('thumb-list');
   const pageContainer = document.getElementById('page-container');
+  const journalBook = document.getElementById('journal-book');
+  const canvasLeft = document.getElementById('canvas-left');
+  const ctxLeft = canvasLeft.getContext('2d');
+  const svgLinesLeft = document.getElementById('page-lines-left');
+  const pageLeft = document.getElementById('page-left');
 
   // ── IndexedDB ───────────────────────────────────────────
   function openDB() {
@@ -77,22 +81,28 @@
   }
 
   // ── Canvas setup ────────────────────────────────────────
-  function setCanvasSize() {
-    const rect = pageContainer.getBoundingClientRect();
+  function setupCanvas(targetCanvas, targetCtx, targetContainer, targetSvg) {
+    const rect = targetContainer.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
-    drawRuledLines(rect.width, rect.height);
+    targetCanvas.width = rect.width * dpr;
+    targetCanvas.height = rect.height * dpr;
+    targetCtx.scale(dpr, dpr);
+    targetCanvas.style.width = rect.width + 'px';
+    targetCanvas.style.height = rect.height + 'px';
+    drawDots(targetSvg, rect.width, rect.height);
   }
 
-  function drawRuledLines(w, h) {
-    svgLines.innerHTML = '';
-    svgLines.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    svgLines.style.width = w + 'px';
-    svgLines.style.height = h + 'px';
+  function setCanvasSize() {
+    setupCanvas(canvas, ctx, pageContainer, svgLines);
+    if (spreadMode) setupCanvas(canvasLeft, ctxLeft, pageLeft, svgLinesLeft);
+  }
+
+  function drawDots(svgEl, w, h) {
+    svgEl.innerHTML = '';
+    svgEl.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svgEl.style.width = w + 'px';
+    svgEl.style.height = h + 'px';
 
     const gap = 30;
     const marginTop = 40;
@@ -105,16 +115,15 @@
         dot.setAttribute('cy', y);
         dot.setAttribute('r', '1.2');
         dot.setAttribute('fill', 'var(--line-blue)');
-        svgLines.appendChild(dot);
+        svgEl.appendChild(dot);
       }
     }
   }
 
   // ── Page load / save ────────────────────────────────────
-  async function loadPage(idx) {
-    document.getElementById('journal-book').classList.toggle('spine-right', idx % 2 === 1);
-
-    const rect = pageContainer.getBoundingClientRect();
+  async function loadCanvasContent(targetCtx, targetCanvas, targetContainer, idx) {
+    const rect = targetContainer.getBoundingClientRect();
+    targetCtx.clearRect(0, 0, rect.width, rect.height);
 
     let dataURL = pages[idx];
     if (!dataURL) {
@@ -125,24 +134,50 @@
     if (dataURL) {
       await new Promise(resolve => {
         const img = new Image();
-        img.onload = () => { ctx.drawImage(img, 0, 0, rect.width, rect.height); resolve(); };
+        img.onload = () => { targetCtx.drawImage(img, 0, 0, rect.width, rect.height); resolve(); };
         img.onerror = resolve;
         img.src = dataURL;
       });
     }
-    pageLabel.textContent = `Page ${idx + 1}`;
   }
 
-  function scheduleSave() {
-    if (pendingSave) clearTimeout(pendingSave);
-    pendingSave = setTimeout(() => { savePage(currentPage); }, 600);
+  async function loadPage(idx) {
+    if (spreadMode) {
+      journalBook.classList.remove('spine-right');
+      await loadCanvasContent(ctx, canvas, pageContainer, idx);
+      const leftIdx = idx - 1;
+      if (leftIdx >= 0) {
+        canvasLeft.style.pointerEvents = 'auto';
+        canvasLeft.style.cursor = 'crosshair';
+        await loadCanvasContent(ctxLeft, canvasLeft, pageLeft, leftIdx);
+      } else {
+        canvasLeft.style.pointerEvents = 'none';
+        canvasLeft.style.cursor = 'default';
+        const rect = pageLeft.getBoundingClientRect();
+        ctxLeft.clearRect(0, 0, rect.width, rect.height);
+      }
+      pageLabel.textContent = leftIdx >= 0 ? `Pages ${leftIdx + 1}–${idx + 1}` : `Page ${idx + 1}`;
+    } else {
+      journalBook.classList.toggle('spine-right', idx % 2 === 1);
+      await loadCanvasContent(ctx, canvas, pageContainer, idx);
+      pageLabel.textContent = `Page ${idx + 1}`;
+    }
   }
 
-  async function savePage(idx) {
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  function schedulePageSave(idx, targetCanvas, targetCtx) {
+    if (idx < 0) return;
+    if (pendingSaves.has(targetCanvas)) clearTimeout(pendingSaves.get(targetCanvas));
+    pendingSaves.set(targetCanvas, setTimeout(async () => {
+      pendingSaves.delete(targetCanvas);
+      await saveCanvas(idx, targetCanvas, targetCtx);
+    }, 600));
+  }
+
+  async function saveCanvas(idx, targetCanvas, targetCtx) {
+    const data = targetCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height).data;
     const hasContent = data.some(v => v !== 0);
     if (hasContent) {
-      const url = canvas.toDataURL('image/png');
+      const url = targetCanvas.toDataURL('image/png');
       pages[idx] = url;
       await dbPut(idx, url);
     } else {
@@ -151,9 +186,19 @@
     }
   }
 
+  async function saveCurrentPages() {
+    for (const timer of pendingSaves.values()) clearTimeout(timer);
+    pendingSaves.clear();
+    await saveCanvas(currentPage, canvas, ctx);
+    if (spreadMode) {
+      const leftIdx = currentPage - 1;
+      if (leftIdx >= 0) await saveCanvas(leftIdx, canvasLeft, ctxLeft);
+    }
+  }
+
   // ── Drawing ─────────────────────────────────────────────
-  function getPos(e) {
-    const rect = canvas.getBoundingClientRect();
+  function getPos(e, targetCanvas) {
+    const rect = targetCanvas.getBoundingClientRect();
     return {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
@@ -161,96 +206,110 @@
     };
   }
 
-  function applyTool(pos) {
+  function applyTool(targetCtx, pos) {
     if (tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = penSize * 8;
-      ctx.strokeStyle = 'rgba(0,0,0,1)';
-      ctx.globalAlpha = 1;
+      targetCtx.globalCompositeOperation = 'destination-out';
+      targetCtx.lineWidth = penSize * 8;
+      targetCtx.strokeStyle = 'rgba(0,0,0,1)';
+      targetCtx.globalAlpha = 1;
     } else if (tool === 'highlighter') {
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.lineWidth = penSize * 10;
-      ctx.strokeStyle = penColor;
-      ctx.globalAlpha = 0.35;
+      targetCtx.globalCompositeOperation = 'multiply';
+      targetCtx.lineWidth = penSize * 10;
+      targetCtx.strokeStyle = penColor;
+      targetCtx.globalAlpha = 0.35;
     } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.lineWidth = Math.max(0.5, penSize * (0.5 + pos.pressure * 0.8));
-      ctx.strokeStyle = penColor;
-      ctx.globalAlpha = 1;
+      targetCtx.globalCompositeOperation = 'source-over';
+      targetCtx.lineWidth = Math.max(0.5, penSize * (0.5 + pos.pressure * 0.8));
+      targetCtx.strokeStyle = penColor;
+      targetCtx.globalAlpha = 1;
     }
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    targetCtx.lineCap = 'round';
+    targetCtx.lineJoin = 'round';
   }
 
-  canvas.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'touch') return;
-    e.preventDefault();
-    canvas.setPointerCapture(e.pointerId);
-    isDrawing = true;
-    const pos = getPos(e);
-    lastX = pos.x; lastY = pos.y;
-    ctx.beginPath();
-    ctx.moveTo(lastX, lastY);
-  }, { passive: false });
+  function attachDrawHandlers(targetCanvas, targetCtx, getPageIndex) {
+    let isDrawingLocal = false;
+    let lastXLocal = 0, lastYLocal = 0;
 
-  canvas.addEventListener('pointermove', e => {
-    if (!isDrawing || e.pointerType === 'touch') return;
-    e.preventDefault();
+    targetCanvas.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'touch') return;
+      e.preventDefault();
+      targetCanvas.setPointerCapture(e.pointerId);
+      isDrawingLocal = true;
+      const pos = getPos(e, targetCanvas);
+      lastXLocal = pos.x; lastYLocal = pos.y;
+      targetCtx.beginPath();
+      targetCtx.moveTo(lastXLocal, lastYLocal);
+    }, { passive: false });
 
-    const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-    for (const ev of events) {
-      const p = getPos(ev);
-      applyTool(p);
-      ctx.beginPath();
-      ctx.moveTo(lastX, lastY);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      lastX = p.x; lastY = p.y;
-    }
-    scheduleSave();
-  }, { passive: false });
+    targetCanvas.addEventListener('pointermove', e => {
+      if (!isDrawingLocal || e.pointerType === 'touch') return;
+      e.preventDefault();
+      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+      for (const ev of events) {
+        const p = getPos(ev, targetCanvas);
+        applyTool(targetCtx, p);
+        targetCtx.beginPath();
+        targetCtx.moveTo(lastXLocal, lastYLocal);
+        targetCtx.lineTo(p.x, p.y);
+        targetCtx.stroke();
+        lastXLocal = p.x; lastYLocal = p.y;
+      }
+      schedulePageSave(getPageIndex(), targetCanvas, targetCtx);
+    }, { passive: false });
 
-  canvas.addEventListener('pointerup', () => {
-    if (!isDrawing) return;
-    isDrawing = false;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-    scheduleSave();
-  });
+    targetCanvas.addEventListener('pointerup', () => {
+      if (!isDrawingLocal) return;
+      isDrawingLocal = false;
+      targetCtx.globalCompositeOperation = 'source-over';
+      targetCtx.globalAlpha = 1;
+      schedulePageSave(getPageIndex(), targetCanvas, targetCtx);
+    });
 
-  canvas.addEventListener('pointercancel', () => {
-    isDrawing = false;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 1;
-  });
+    targetCanvas.addEventListener('pointercancel', () => {
+      isDrawingLocal = false;
+      targetCtx.globalCompositeOperation = 'source-over';
+      targetCtx.globalAlpha = 1;
+    });
+  }
+
+  attachDrawHandlers(canvas, ctx, () => currentPage);
+  attachDrawHandlers(canvasLeft, ctxLeft, () => currentPage - 1);
 
   // ── Touch gestures (finger swipe = page turn) ───────────
   let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
 
-  canvas.addEventListener('touchstart', e => {
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
-    touchStartTime = Date.now();
-  }, { passive: true });
+  function attachSwipeHandlers(el) {
+    el.addEventListener('touchstart', e => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      touchStartTime = Date.now();
+    }, { passive: true });
 
-  canvas.addEventListener('touchend', async e => {
-    if (!e.changedTouches.length) return;
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-    const dt = Date.now() - touchStartTime;
-    if (Math.abs(dx) > 55 && dy < 90 && dt < 500) {
-      if (dx < 0) await flipPage(1);
-      else await flipPage(-1);
-    }
-  }, { passive: true });
+    el.addEventListener('touchend', async e => {
+      if (!e.changedTouches.length) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+      const dt = Date.now() - touchStartTime;
+      if (Math.abs(dx) > 55 && dy < 90 && dt < 500) {
+        if (dx < 0) await flipPage(1);
+        else await flipPage(-1);
+      }
+    }, { passive: true });
+  }
+
+  attachSwipeHandlers(canvas);
+  attachSwipeHandlers(canvasLeft);
 
   async function flipPage(dir) {
     if (dir === -1 && currentPage === 0) return;
-    await savePage(currentPage);
+    await saveCurrentPages();
+
     turnOverlay.classList.remove('flash-right', 'flash-left');
     void turnOverlay.offsetWidth;
     turnOverlay.classList.add(dir === 1 ? 'flash-right' : 'flash-left');
-    currentPage += dir;
+
+    currentPage = Math.max(0, currentPage + (spreadMode ? dir * 2 : dir));
     await loadPage(currentPage);
   }
 
@@ -305,6 +364,24 @@
     toast('Page exported');
   });
 
+  // ── Spread toggle ────────────────────────────────────────
+  document.getElementById('btn-spread').addEventListener('click', async () => {
+    await saveCurrentPages();
+    spreadMode = !spreadMode;
+    document.getElementById('btn-spread').classList.toggle('active', spreadMode);
+
+    if (spreadMode) {
+      // Snap to nearest even (right-side) page index
+      if (currentPage % 2 === 1) currentPage++;
+      journalBook.classList.add('spread');
+    } else {
+      journalBook.classList.remove('spread');
+    }
+
+    setCanvasSize();
+    await loadPage(currentPage);
+  });
+
   // ── Thumbnails ──────────────────────────────────────────
   document.getElementById('btn-thumbs').addEventListener('click', async () => {
     thumbPanelOpen = !thumbPanelOpen;
@@ -322,7 +399,6 @@
     const allPages = new Set([...keys, currentPage]);
     const sorted = [...allPages].sort((a, b) => a - b);
 
-    // Add a blank new page at the end
     const maxPage = sorted.length ? Math.max(...sorted) : 0;
     sorted.push(maxPage + 1);
 
@@ -353,8 +429,9 @@
       item.appendChild(tc);
       item.appendChild(numEl);
       item.addEventListener('click', async () => {
-        await savePage(currentPage);
+        await saveCurrentPages();
         currentPage = idx;
+        if (spreadMode && currentPage % 2 === 1) currentPage++;
         await loadPage(currentPage);
         thumbPanelOpen = false;
         thumbPanel.classList.remove('open');
@@ -398,7 +475,7 @@
     await loadPage(0);
 
     window.addEventListener('resize', async () => {
-      await savePage(currentPage);
+      await saveCurrentPages();
       setCanvasSize();
       await loadPage(currentPage);
     });

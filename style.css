@@ -97,6 +97,43 @@ html, body {
   border-right: none;
   border-left: 1px solid rgba(0,0,0,0.2);
 }
+
+/* ── Spread view ─────────────────────────────────────── */
+#page-left {
+  display: none;
+  aspect-ratio: 148 / 210;
+  height: 100%;
+  position: relative;
+  background: var(--paper);
+  overflow: hidden;
+}
+#page-lines-left {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+#canvas-left {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  z-index: 1;
+  cursor: crosshair;
+}
+
+#journal-book.spread {
+  flex-direction: row;
+  border-radius: 8px;
+  height: min(100%, calc((100vw - 54px) * 210 / 296));
+}
+#journal-book.spread #page-left {
+  display: block;
+}
+#journal-book.spread #spine {
+  background: linear-gradient(90deg, #4a3828 0%, var(--spine-hi) 50%, #4a3828 100%);
+  border-right: 1px solid rgba(0,0,0,0.15);
+  border-left: 1px solid rgba(0,0,0,0.15);
+}
 #spine::after {
   content: '';
   position: absolute;
