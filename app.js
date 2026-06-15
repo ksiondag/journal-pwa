@@ -5,7 +5,9 @@
   const DB_NAME = 'journal_db';
   const DB_VER = 1;
   const STORE = 'pages';
-  const PAGE_W = 560; // reference page width; dot spacing scales proportionally with this
+  const PAGE_W = 560;   // reference page width; dot spacing scales proportionally with this
+  const SAVE_W = 1754;  // fixed save resolution (A5 @ 150 DPI)
+  const SAVE_H = 2480;
 
   let db = null;
   let currentPage = 0;   // in spread mode, always even-indexed (right-side page)
@@ -136,10 +138,9 @@
   function setupCanvas(targetCanvas, targetCtx, targetContainer, targetSvg) {
     const rect = targetContainer.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const dpr = window.devicePixelRatio || 1;
-    targetCanvas.width = rect.width * dpr;
-    targetCanvas.height = rect.height * dpr;
-    targetCtx.scale(dpr, dpr);
+    // Canvas is always the document resolution; browser CSS-scales it to fit the display.
+    targetCanvas.width = SAVE_W;
+    targetCanvas.height = SAVE_H;
     targetCanvas.style.width = rect.width + 'px';
     targetCanvas.style.height = rect.height + 'px';
     drawDots(targetSvg, rect.width, rect.height);
@@ -177,8 +178,7 @@
 
   // ── Page load / save ────────────────────────────────────
   async function loadCanvasContent(targetCtx, targetCanvas, targetContainer, idx) {
-    const rect = targetContainer.getBoundingClientRect();
-    targetCtx.clearRect(0, 0, rect.width, rect.height);
+    targetCtx.clearRect(0, 0, SAVE_W, SAVE_H);
 
     let dataURL = pages[idx];
     if (!dataURL) {
@@ -189,7 +189,7 @@
     if (dataURL) {
       await new Promise(resolve => {
         const img = new Image();
-        img.onload = () => { targetCtx.drawImage(img, 0, 0, rect.width, rect.height); resolve(); };
+        img.onload = () => { targetCtx.drawImage(img, 0, 0, SAVE_W, SAVE_H); resolve(); };
         img.onerror = resolve;
         img.src = dataURL;
       });
@@ -208,8 +208,7 @@
       } else {
         canvasLeft.style.pointerEvents = 'none';
         canvasLeft.style.cursor = 'default';
-        const rect = pageLeft.getBoundingClientRect();
-        ctxLeft.clearRect(0, 0, rect.width, rect.height);
+        ctxLeft.clearRect(0, 0, SAVE_W, SAVE_H);
       }
       pageLabel.textContent = leftIdx >= 0 ? `Pages ${leftIdx + 1}–${idx + 1}` : `Page ${idx + 1}`;
     } else {
@@ -229,7 +228,7 @@
   }
 
   async function saveCanvas(idx, targetCanvas, targetCtx) {
-    const data = targetCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height).data;
+    const data = targetCtx.getImageData(0, 0, SAVE_W, SAVE_H).data;
     const hasContent = data.some(v => v !== 0);
     if (hasContent) {
       const url = targetCanvas.toDataURL('image/png');
@@ -254,63 +253,64 @@
   // ── Drawing ─────────────────────────────────────────────
   function getPos(e, targetCanvas) {
     const pressure = e.pressure > 0 ? e.pressure : 0.5;
+    // CSS display size of the canvas element.
+    const cssW = parseFloat(targetCanvas.style.width);
+    const cssH = parseFloat(targetCanvas.style.height);
+    // Scale factor: CSS pixels → document (SAVE_W × SAVE_H) coordinates.
+    const docScale = SAVE_W / cssW;
+
+    let cssX, cssY;
 
     if (viewScale === 1 && viewRotation === 0) {
       const rect = targetCanvas.getBoundingClientRect();
-      return { x: e.clientX - rect.left, y: e.clientY - rect.top, pressure };
+      cssX = e.clientX - rect.left;
+      cssY = e.clientY - rect.top;
+    } else {
+      // The CSS transform rotate(r)scale(s) on #journal-book is applied around its center.
+      // For any rectangle, the AABB center equals the visual center, so the book's visual
+      // center (which stays fixed under rotation around own center) can be read from the AABB.
+      const bookRect = journalBook.getBoundingClientRect();
+      const bookCx = (bookRect.left + bookRect.right) / 2;
+      const bookCy = (bookRect.top + bookRect.bottom) / 2;
+
+      const rad = viewRotation * Math.PI / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+
+      function screenToBook(sx, sy) {
+        const dx = (sx - bookCx) / viewScale;
+        const dy = (sy - bookCy) / viewScale;
+        return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+      }
+
+      const canvasRect = targetCanvas.getBoundingClientRect();
+      const canvasCenter = screenToBook(
+        (canvasRect.left + canvasRect.right) / 2,
+        (canvasRect.top + canvasRect.bottom) / 2
+      );
+
+      const pLocal = screenToBook(e.clientX, e.clientY);
+      cssX = pLocal.x - (canvasCenter.x - cssW / 2);
+      cssY = pLocal.y - (canvasCenter.y - cssH / 2);
     }
 
-    // The CSS transform rotate(r)scale(s) on #journal-book is applied around its center.
-    // For any rectangle, the AABB center equals the visual center, so the book's visual
-    // center (which stays fixed under rotation around own center) can be read from the AABB.
-    const bookRect = journalBook.getBoundingClientRect();
-    const bookCx = (bookRect.left + bookRect.right) / 2;
-    const bookCy = (bookRect.top + bookRect.bottom) / 2;
-
-    const rad = viewRotation * Math.PI / 180;
-    const cos = Math.cos(rad);
-    const sin = Math.sin(rad);
-
-    // Inverse of rotate(r)scale(s): un-scale then un-rotate, relative to book center.
-    function screenToBook(sx, sy) {
-      const dx = (sx - bookCx) / viewScale;
-      const dy = (sy - bookCy) / viewScale;
-      return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
-    }
-
-    // For a rectangle, AABB center === visual center regardless of rotation.
-    const canvasRect = targetCanvas.getBoundingClientRect();
-    const canvasCenter = screenToBook(
-      (canvasRect.left + canvasRect.right) / 2,
-      (canvasRect.top + canvasRect.bottom) / 2
-    );
-
-    // Canvas CSS pixel size (set explicitly by setCanvasSize).
-    const cw = parseFloat(targetCanvas.style.width);
-    const ch = parseFloat(targetCanvas.style.height);
-
-    const pLocal = screenToBook(e.clientX, e.clientY);
-    return {
-      x: pLocal.x - (canvasCenter.x - cw / 2),
-      y: pLocal.y - (canvasCenter.y - ch / 2),
-      pressure
-    };
+    return { x: cssX * docScale, y: cssY * docScale, pressure };
   }
 
-  function applyTool(targetCtx, pos) {
+  function applyTool(targetCtx, pos, lineScale) {
     if (tool === 'eraser') {
       targetCtx.globalCompositeOperation = 'destination-out';
-      targetCtx.lineWidth = penSize * 8;
+      targetCtx.lineWidth = penSize * 8 * lineScale;
       targetCtx.strokeStyle = 'rgba(0,0,0,1)';
       targetCtx.globalAlpha = 1;
     } else if (tool === 'highlighter') {
       targetCtx.globalCompositeOperation = 'multiply';
-      targetCtx.lineWidth = penSize * 10;
+      targetCtx.lineWidth = penSize * 10 * lineScale;
       targetCtx.strokeStyle = penColor;
       targetCtx.globalAlpha = 0.35;
     } else {
       targetCtx.globalCompositeOperation = 'source-over';
-      targetCtx.lineWidth = Math.max(0.5, penSize * (0.5 + pos.pressure * 0.8));
+      targetCtx.lineWidth = Math.max(0.5, penSize * (0.5 + pos.pressure * 0.8)) * lineScale;
       targetCtx.strokeStyle = penColor;
       targetCtx.globalAlpha = 1;
     }
@@ -336,10 +336,11 @@
     targetCanvas.addEventListener('pointermove', e => {
       if (!isDrawingLocal || e.pointerType === 'touch') return;
       e.preventDefault();
+      const lineScale = SAVE_W / parseFloat(targetCanvas.style.width);
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of events) {
         const p = getPos(ev, targetCanvas);
-        applyTool(targetCtx, p);
+        applyTool(targetCtx, p, lineScale);
         targetCtx.beginPath();
         targetCtx.moveTo(lastXLocal, lastYLocal);
         targetCtx.lineTo(p.x, p.y);
@@ -471,8 +472,7 @@
   sizeSlider.addEventListener('input', () => { penSize = parseFloat(sizeSlider.value); updateCursorSize(); });
 
   document.getElementById('btn-clear').addEventListener('click', async () => {
-    const rect = pageContainer.getBoundingClientRect();
-    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.clearRect(0, 0, SAVE_W, SAVE_H);
     delete pages[currentPage];
     await dbDelete(currentPage);
     toast('Page cleared');
@@ -491,12 +491,10 @@
     const img = new Image();
     img.onload = () => {
       URL.revokeObjectURL(url);
-      const cw = parseFloat(canvas.style.width);
-      const ch = parseFloat(canvas.style.height);
-      const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight);
+      const scale = Math.min(SAVE_W / img.naturalWidth, SAVE_H / img.naturalHeight);
       const dw = img.naturalWidth * scale;
       const dh = img.naturalHeight * scale;
-      ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      ctx.drawImage(img, (SAVE_W - dw) / 2, (SAVE_H - dh) / 2, dw, dh);
       schedulePageSave(currentPage, canvas, ctx);
       toast('Image imported');
     };
