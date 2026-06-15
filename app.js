@@ -478,6 +478,32 @@
     toast('Page cleared');
   });
 
+  document.getElementById('btn-import').addEventListener('click', () => {
+    document.getElementById('import-input').click();
+  });
+
+  document.getElementById('import-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const cw = parseFloat(canvas.style.width);
+      const ch = parseFloat(canvas.style.height);
+      const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight);
+      const dw = img.naturalWidth * scale;
+      const dh = img.naturalHeight * scale;
+      ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      schedulePageSave(currentPage, canvas, ctx);
+      toast('Image imported');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast('Failed to load image'); };
+    img.src = url;
+  });
+
   document.getElementById('btn-export').addEventListener('click', () => {
     const exp = document.createElement('canvas');
     exp.width = canvas.width;
