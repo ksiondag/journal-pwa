@@ -70,9 +70,7 @@ html, body {
 #journal-book {
   display: flex;
   height: 100%;
-  max-height: 640px;
-  width: 100%;
-  max-width: 800px;
+  max-height: 794px;
   border-radius: 3px 8px 8px 3px;
   box-shadow:
     -2px 0 6px rgba(0,0,0,0.12),
@@ -102,7 +100,7 @@ html, body {
 }
 
 #page-container {
-  flex: 1;
+  aspect-ratio: 148 / 210;
   position: relative;
   background: var(--paper);
   overflow: hidden;
