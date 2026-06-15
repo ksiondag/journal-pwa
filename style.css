@@ -258,38 +258,11 @@ html, body {
   color: var(--ui-muted);
   font-style: italic;
   white-space: nowrap;
-  margin-left: auto;
   flex-shrink: 0;
+  min-width: 56px;
+  text-align: center;
 }
 
-/* ── Nav buttons on page ─────────────────────────────── */
-#page-nav {
-  position: absolute;
-  bottom: 14px;
-  left: 0; right: 0;
-  display: flex;
-  justify-content: space-between;
-  padding: 0 20px;
-  pointer-events: none;
-  z-index: 4;
-}
-.nav-btn {
-  pointer-events: all;
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  border: 1px solid var(--ui-border);
-  background: var(--ui-bg);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--ui-text);
-  font-size: 18px;
-  transition: background 0.12s;
-  -webkit-tap-highlight-color: transparent;
-}
-.nav-btn:hover { background: rgba(255,255,255,0.97); }
-.nav-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ── Toast ───────────────────────────────────────────── */
 #toast {

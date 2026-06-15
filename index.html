@@ -67,7 +67,15 @@
       <svg viewBox="0 0 24 24"><path d="M12 3v13"/><path d="M8 12l4 4 4-4"/><path d="M3 20h18"/></svg>
     </button>
 
+    <div class="sep"></div>
+
+    <button class="tool-btn" id="btn-prev" title="Previous page">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
     <span id="page-label">Page 1</span>
+    <button class="tool-btn" id="btn-next" title="Next page">
+      <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
   </div>
 
   <div id="journal-wrap">
@@ -81,14 +89,6 @@
         <svg id="page-lines" xmlns="http://www.w3.org/2000/svg"></svg>
         <canvas id="draw-canvas"></canvas>
         <div id="turn-overlay"></div>
-        <div id="page-nav">
-          <button class="nav-btn" id="btn-prev" title="Previous page">
-            <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
-          </button>
-          <button class="nav-btn" id="btn-next" title="Next page">
-            <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
-          </button>
-        </div>
       </div>
     </div>
   </div>
