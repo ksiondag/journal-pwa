@@ -503,16 +503,9 @@
   });
 
   document.getElementById('btn-export').addEventListener('click', () => {
-    const exp = document.createElement('canvas');
-    exp.width = canvas.width;
-    exp.height = canvas.height;
-    const ectx = exp.getContext('2d');
-    ectx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim() || '#FAF7F0';
-    ectx.fillRect(0, 0, exp.width, exp.height);
-    ectx.drawImage(canvas, 0, 0);
     const link = document.createElement('a');
     link.download = `journal-page-${currentPage + 1}.png`;
-    link.href = exp.toDataURL('image/png');
+    link.href = canvas.toDataURL('image/png');
     link.click();
     toast('Page exported');
   });
