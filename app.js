@@ -16,6 +16,12 @@
   const pendingSaves = new Map(); // canvas el → timeoutId
   let thumbPanelOpen = false;
 
+  // View transform (zoom + rotation applied on top of auto-fit)
+  let viewScale = 1;
+  let viewRotation = 0;
+  let gestureActive = false;
+  let gestureStartDist = 0, gestureStartAngle = 0, gestureStartScale = 1, gestureStartRotation = 0;
+
   // ── Elements ────────────────────────────────────────────
   const canvas = document.getElementById('draw-canvas');
   const ctx = canvas.getContext('2d');
@@ -29,6 +35,7 @@
   const thumbList = document.getElementById('thumb-list');
   const pageContainer = document.getElementById('page-container');
   const journalBook = document.getElementById('journal-book');
+  const journalWrap = document.getElementById('journal-wrap');
   const canvasLeft = document.getElementById('canvas-left');
   const ctxLeft = canvasLeft.getContext('2d');
   const svgLinesLeft = document.getElementById('page-lines-left');
@@ -78,6 +85,19 @@
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => resolve([]);
     });
+  }
+
+  // ── View transform ──────────────────────────────────────
+  function applyViewTransform() {
+    journalBook.style.transform = (viewScale === 1 && viewRotation === 0)
+      ? ''
+      : `rotate(${viewRotation}deg) scale(${viewScale})`;
+  }
+
+  function resetView() {
+    viewScale = 1;
+    viewRotation = 0;
+    journalBook.style.transform = '';
   }
 
   // ── Canvas setup ────────────────────────────────────────
@@ -198,11 +218,47 @@
 
   // ── Drawing ─────────────────────────────────────────────
   function getPos(e, targetCanvas) {
-    const rect = targetCanvas.getBoundingClientRect();
+    const pressure = e.pressure > 0 ? e.pressure : 0.5;
+
+    if (viewScale === 1 && viewRotation === 0) {
+      const rect = targetCanvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top, pressure };
+    }
+
+    // The CSS transform rotate(r)scale(s) on #journal-book is applied around its center.
+    // For any rectangle, the AABB center equals the visual center, so the book's visual
+    // center (which stays fixed under rotation around own center) can be read from the AABB.
+    const bookRect = journalBook.getBoundingClientRect();
+    const bookCx = (bookRect.left + bookRect.right) / 2;
+    const bookCy = (bookRect.top + bookRect.bottom) / 2;
+
+    const rad = viewRotation * Math.PI / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    // Inverse of rotate(r)scale(s): un-scale then un-rotate, relative to book center.
+    function screenToBook(sx, sy) {
+      const dx = (sx - bookCx) / viewScale;
+      const dy = (sy - bookCy) / viewScale;
+      return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+    }
+
+    // For a rectangle, AABB center === visual center regardless of rotation.
+    const canvasRect = targetCanvas.getBoundingClientRect();
+    const canvasCenter = screenToBook(
+      (canvasRect.left + canvasRect.right) / 2,
+      (canvasRect.top + canvasRect.bottom) / 2
+    );
+
+    // Canvas CSS pixel size (set explicitly by setCanvasSize).
+    const cw = parseFloat(targetCanvas.style.width);
+    const ch = parseFloat(targetCanvas.style.height);
+
+    const pLocal = screenToBook(e.clientX, e.clientY);
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      pressure: e.pressure > 0 ? e.pressure : 0.5
+      x: pLocal.x - (canvasCenter.x - cw / 2),
+      y: pLocal.y - (canvasCenter.y - ch / 2),
+      pressure
     };
   }
 
@@ -281,13 +337,14 @@
 
   function attachSwipeHandlers(el) {
     el.addEventListener('touchstart', e => {
+      if (e.touches.length >= 2) return; // gesture handler takes over
       touchStartX = e.touches[0].clientX;
       touchStartY = e.touches[0].clientY;
       touchStartTime = Date.now();
     }, { passive: true });
 
     el.addEventListener('touchend', async e => {
-      if (!e.changedTouches.length) return;
+      if (gestureActive || !e.changedTouches.length) return;
       const dx = e.changedTouches[0].clientX - touchStartX;
       const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
       const dt = Date.now() - touchStartTime;
@@ -300,6 +357,42 @@
 
   attachSwipeHandlers(canvas);
   attachSwipeHandlers(canvasLeft);
+
+  // ── Pinch-to-zoom + rotation ─────────────────────────────
+  journalWrap.addEventListener('touchstart', e => {
+    if (e.touches.length !== 2) return;
+    e.preventDefault();
+    gestureActive = true;
+    const t1 = e.touches[0], t2 = e.touches[1];
+    gestureStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+    gestureStartAngle = Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
+    gestureStartScale = viewScale;
+    gestureStartRotation = viewRotation;
+  }, { passive: false });
+
+  journalWrap.addEventListener('touchmove', e => {
+    if (!gestureActive || e.touches.length !== 2) return;
+    e.preventDefault();
+    const t1 = e.touches[0], t2 = e.touches[1];
+    const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+    const angle = Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
+    viewScale = Math.max(0.2, Math.min(5, gestureStartScale * (dist / gestureStartDist)));
+    viewRotation = gestureStartRotation + (angle - gestureStartAngle);
+    applyViewTransform();
+  }, { passive: false });
+
+  journalWrap.addEventListener('touchend', e => {
+    if (e.touches.length < 2) gestureActive = false;
+  }, { passive: true });
+
+  // Scroll-wheel zoom for desktop/trackpad
+  journalWrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    viewScale = Math.max(0.2, Math.min(5, viewScale * (e.deltaY < 0 ? 1.1 : 0.9)));
+    applyViewTransform();
+  }, { passive: false });
+
+  document.getElementById('btn-reset-view').addEventListener('click', resetView);
 
   async function flipPage(dir) {
     if (dir === -1 && currentPage === 0) return;
