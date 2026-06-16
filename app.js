@@ -114,11 +114,8 @@
 
   // ── Cursor ring ──────────────────────────────────────────
   function updateCursorSize() {
-    let d;
-    if (tool === 'eraser') d = penSize * 8;
-    else if (tool === 'highlighter') d = penSize * 10;
-    else d = penSize;
-    d = Math.max(2, d * viewScale);
+    const brush = BRUSH_DEFS[tool];
+    const d = Math.max(2, penSize * (brush ? brush.baseSize : 1) * viewScale);
     cursorRing.style.width = d + 'px';
     cursorRing.style.height = d + 'px';
   }
@@ -303,58 +300,143 @@
     return { x: cssX * docScale, y: cssY * docScale, pressure };
   }
 
-  function applyTool(targetCtx, pos, lineScale, activeTool) {
-    if (activeTool === 'eraser') {
-      targetCtx.globalCompositeOperation = 'destination-out';
-      targetCtx.lineWidth = penSize * 8 * lineScale;
-      targetCtx.strokeStyle = 'rgba(0,0,0,1)';
-      targetCtx.globalAlpha = 1;
-    } else if (activeTool === 'highlighter') {
-      targetCtx.globalCompositeOperation = 'multiply';
-      targetCtx.lineWidth = penSize * 10 * lineScale;
-      targetCtx.strokeStyle = penColor;
-      targetCtx.globalAlpha = 0.35;
-    } else {
-      targetCtx.globalCompositeOperation = 'source-over';
-      targetCtx.lineWidth = Math.max(0.5, penSize * (0.5 + pos.pressure * 0.8)) * lineScale;
-      targetCtx.strokeStyle = penColor;
-      targetCtx.globalAlpha = 1;
-    }
-    targetCtx.lineCap = 'round';
-    targetCtx.lineJoin = 'round';
+  // ── Brush engine ─────────────────────────────────────────
+
+  function hexToRgb(hex) {
+    const c = hex.replace('#', '');
+    const s = c.length === 3 ? c.split('').map(v => v+v).join('') : c;
+    return [parseInt(s.slice(0,2),16), parseInt(s.slice(2,4),16), parseInt(s.slice(4,6),16)];
   }
 
-  function drawPencilSegment(targetCtx, x0, y0, x1, y1, lineScale, pressure) {
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    const nx = -dy / len;
-    const ny = dx / len;
-    const spread = penSize * 0.7 * lineScale;
-    const baseWidth = Math.max(0.4, penSize * 0.35 * lineScale);
-    const alpha = 0.45 + pressure * 0.3;
+  function lerp(a, b, t) { return a + (b - a) * t; }
 
-    targetCtx.globalCompositeOperation = 'source-over';
-    targetCtx.lineCap = 'round';
-    targetCtx.lineJoin = 'round';
-    targetCtx.strokeStyle = penColor;
-    targetCtx.lineWidth = baseWidth;
+  const BRUSH_DEFS = {
+    pen: {
+      spacing: 0.06,
+      sizePressure: 0.7,
+      opacityPressure: 0,
+      baseOpacity: 1,
+      baseSize: 1,
+      scatter: 0,
+      hardness: 0.82,
+      blendMode: 'source-over',
+    },
+    pencil: {
+      spacing: 0.18,
+      sizePressure: 0.35,
+      opacityPressure: 0.5,
+      baseOpacity: 0.75,
+      baseSize: 1.2,
+      scatter: 0.7,
+      hardness: 0.2,
+      blendMode: 'source-over',
+    },
+    highlighter: {
+      spacing: 0.04,
+      sizePressure: 0,
+      opacityPressure: 0,
+      baseOpacity: 0.28,
+      baseSize: 10,
+      scatter: 0,
+      hardness: 0.92,
+      blendMode: 'multiply',
+    },
+    eraser: {
+      spacing: 0.06,
+      sizePressure: 0,
+      opacityPressure: 0,
+      baseOpacity: 1,
+      baseSize: 8,
+      scatter: 0,
+      hardness: 1.0,
+      blendMode: 'destination-out',
+    },
+  };
 
-    for (let i = 0; i < 4; i++) {
-      const offset = (Math.random() - 0.5) * 2 * spread;
-      targetCtx.globalAlpha = alpha * (0.7 + Math.random() * 0.3);
-      targetCtx.beginPath();
-      targetCtx.moveTo(x0 + nx * offset, y0 + ny * offset);
-      targetCtx.lineTo(x1 + nx * offset, y1 + ny * offset);
-      targetCtx.stroke();
+  function stampDab(ctx, x, y, diameter, opacity, brush) {
+    const r = diameter / 2;
+    if (r < 0.3) return;
+    ctx.save();
+    ctx.globalCompositeOperation = brush.blendMode;
+    ctx.globalAlpha = opacity;
+    const [cr, cg, cb] = brush.blendMode === 'destination-out' ? [0,0,0] : hexToRgb(penColor);
+    if (brush.hardness >= 0.99) {
+      ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    } else {
+      const grad = ctx.createRadialGradient(x, y, r * brush.hardness, x, y, r);
+      grad.addColorStop(0, `rgba(${cr},${cg},${cb},1)`);
+      grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      ctx.fillStyle = grad;
     }
-    targetCtx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Catmull-Rom: evaluate point+pressure at t through segment P1→P2
+  function cmEval(p0, p1, p2, p3, t) {
+    const t2 = t*t, t3 = t2*t;
+    const f = (a,b,c,d) => 0.5*((2*b)+(-a+c)*t+(2*a-5*b+4*c-d)*t2+(-a+3*b-3*c+d)*t3);
+    return { x: f(p0.x,p1.x,p2.x,p3.x), y: f(p0.y,p1.y,p2.y,p3.y), pressure: f(p0.pressure,p1.pressure,p2.pressure,p3.pressure) };
+  }
+
+  // Walk P1→P2 Catmull-Rom segment, stamp dabs, return updated carry distance
+  function renderSplineSegment(ctx, p0, p1, p2, p3, brush, lineScale, carry) {
+    const baseDiam = penSize * brush.baseSize * lineScale;
+    const spacing = Math.max(1, baseDiam * brush.spacing);
+    const STEPS = 30;
+    let prev = cmEval(p0, p1, p2, p3, 0);
+
+    for (let i = 1; i <= STEPS; i++) {
+      const cur = cmEval(p0, p1, p2, p3, i / STEPS);
+      const segLen = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+      carry += segLen;
+
+      while (carry >= spacing) {
+        carry -= spacing;
+        const frac = segLen > 0 ? 1 - carry / segLen : 1;
+        const pressure = Math.max(0.01, lerp(prev.pressure, cur.pressure, frac));
+        const px = lerp(prev.x, cur.x, frac);
+        const py = lerp(prev.y, cur.y, frac);
+        const diam = Math.max(1, baseDiam * lerp(1, pressure, brush.sizePressure));
+        const opacity = brush.baseOpacity * lerp(1, pressure, brush.opacityPressure);
+
+        let sx = px, sy = py;
+        if (brush.scatter > 0) {
+          const ang = Math.atan2(cur.y - prev.y, cur.x - prev.x) + Math.PI / 2;
+          const amt = (Math.random() - 0.5) * diam * brush.scatter;
+          sx += Math.cos(ang) * amt;
+          sy += Math.sin(ang) * amt;
+        }
+
+        stampDab(ctx, sx, sy, diam, opacity, brush);
+      }
+      prev = cur;
+    }
+    return carry;
   }
 
   function attachDrawHandlers(targetCanvas, targetCtx, getPageIndex) {
     let isDrawingLocal = false;
-    let lastXLocal = 0, lastYLocal = 0;
     let strokeTool = tool;
+    let strokePts = [];
+    let distCarry = 0;
+
+    function getLineScale() { return SAVE_W / parseFloat(targetCanvas.style.width); }
+
+    function flushSegment(idx) {
+      const brush = BRUSH_DEFS[strokeTool] || BRUSH_DEFS.pen;
+      const n = strokePts.length - 1;
+      distCarry = renderSplineSegment(
+        targetCtx,
+        strokePts[Math.max(0, idx - 1)],
+        strokePts[idx],
+        strokePts[idx + 1],
+        strokePts[Math.min(n, idx + 2)],
+        brush, getLineScale(), distCarry
+      );
+    }
 
     targetCanvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
@@ -362,41 +444,38 @@
       targetCanvas.setPointerCapture(e.pointerId);
       isDrawingLocal = true;
       strokeTool = (e.pointerType === 'pen' && (e.buttons & 32)) ? 'eraser' : tool;
-      const pos = getPos(e, targetCanvas);
-      lastXLocal = pos.x; lastYLocal = pos.y;
-      targetCtx.beginPath();
-      targetCtx.moveTo(lastXLocal, lastYLocal);
+      strokePts = [getPos(e, targetCanvas)];
+      distCarry = 0;
     }, { passive: false });
 
     targetCanvas.addEventListener('pointermove', e => {
       if (!isDrawingLocal || e.pointerType === 'touch') return;
       e.preventDefault();
-      const lineScale = SAVE_W / parseFloat(targetCanvas.style.width);
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of events) {
-        const p = getPos(ev, targetCanvas);
-        if (strokeTool === 'pencil') {
-          drawPencilSegment(targetCtx, lastXLocal, lastYLocal, p.x, p.y, lineScale, p.pressure);
-        } else {
-          applyTool(targetCtx, p, lineScale, strokeTool);
-          targetCtx.beginPath();
-          targetCtx.moveTo(lastXLocal, lastYLocal);
-          targetCtx.lineTo(p.x, p.y);
-          targetCtx.stroke();
-        }
-        lastXLocal = p.x; lastYLocal = p.y;
+        strokePts.push(getPos(ev, targetCanvas));
+        if (strokePts.length >= 3) flushSegment(strokePts.length - 3);
       }
       schedulePageSave(getPageIndex(), targetCanvas, targetCtx);
     }, { passive: false });
 
-    targetCanvas.addEventListener('pointerup', () => {
+    function finishStroke() {
       if (!isDrawingLocal) return;
       isDrawingLocal = false;
+      const brush = BRUSH_DEFS[strokeTool] || BRUSH_DEFS.pen;
+      if (strokePts.length === 1) {
+        const p = strokePts[0];
+        const diam = Math.max(1, penSize * brush.baseSize * getLineScale() * lerp(1, p.pressure, brush.sizePressure));
+        stampDab(targetCtx, p.x, p.y, diam, brush.baseOpacity, brush);
+      } else if (strokePts.length >= 2) {
+        flushSegment(strokePts.length - 2);
+      }
       targetCtx.globalCompositeOperation = 'source-over';
       targetCtx.globalAlpha = 1;
       schedulePageSave(getPageIndex(), targetCanvas, targetCtx);
-    });
+    }
 
+    targetCanvas.addEventListener('pointerup', finishStroke);
     targetCanvas.addEventListener('pointercancel', () => {
       isDrawingLocal = false;
       targetCtx.globalCompositeOperation = 'source-over';
