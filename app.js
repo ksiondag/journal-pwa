@@ -324,6 +324,33 @@
     targetCtx.lineJoin = 'round';
   }
 
+  function drawPencilSegment(targetCtx, x0, y0, x1, y1, lineScale, pressure) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const spread = penSize * 0.7 * lineScale;
+    const baseWidth = Math.max(0.4, penSize * 0.35 * lineScale);
+    const alpha = 0.45 + pressure * 0.3;
+
+    targetCtx.globalCompositeOperation = 'source-over';
+    targetCtx.lineCap = 'round';
+    targetCtx.lineJoin = 'round';
+    targetCtx.strokeStyle = penColor;
+    targetCtx.lineWidth = baseWidth;
+
+    for (let i = 0; i < 4; i++) {
+      const offset = (Math.random() - 0.5) * 2 * spread;
+      targetCtx.globalAlpha = alpha * (0.7 + Math.random() * 0.3);
+      targetCtx.beginPath();
+      targetCtx.moveTo(x0 + nx * offset, y0 + ny * offset);
+      targetCtx.lineTo(x1 + nx * offset, y1 + ny * offset);
+      targetCtx.stroke();
+    }
+    targetCtx.globalAlpha = 1;
+  }
+
   function attachDrawHandlers(targetCanvas, targetCtx, getPageIndex) {
     let isDrawingLocal = false;
     let lastXLocal = 0, lastYLocal = 0;
@@ -348,11 +375,15 @@
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of events) {
         const p = getPos(ev, targetCanvas);
-        applyTool(targetCtx, p, lineScale, strokeTool);
-        targetCtx.beginPath();
-        targetCtx.moveTo(lastXLocal, lastYLocal);
-        targetCtx.lineTo(p.x, p.y);
-        targetCtx.stroke();
+        if (strokeTool === 'pencil') {
+          drawPencilSegment(targetCtx, lastXLocal, lastYLocal, p.x, p.y, lineScale, p.pressure);
+        } else {
+          applyTool(targetCtx, p, lineScale, strokeTool);
+          targetCtx.beginPath();
+          targetCtx.moveTo(lastXLocal, lastYLocal);
+          targetCtx.lineTo(p.x, p.y);
+          targetCtx.stroke();
+        }
         lastXLocal = p.x; lastYLocal = p.y;
       }
       schedulePageSave(getPageIndex(), targetCanvas, targetCtx);
@@ -476,11 +507,13 @@
   }
 
   document.getElementById('btn-pen').dataset.tool = 'pen';
+  document.getElementById('btn-pencil').dataset.tool = 'pencil';
   document.getElementById('btn-eraser').dataset.tool = 'eraser';
   document.getElementById('btn-highlighter').dataset.tool = 'highlighter';
   document.getElementById('btn-pen').classList.add('active');
 
   document.getElementById('btn-pen').addEventListener('click', () => setTool('pen'));
+  document.getElementById('btn-pencil').addEventListener('click', () => setTool('pencil'));
   document.getElementById('btn-eraser').addEventListener('click', () => setTool('eraser'));
   document.getElementById('btn-highlighter').addEventListener('click', () => setTool('highlighter'));
 
@@ -628,6 +661,7 @@
     if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); await flipPage(1); }
     if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); await flipPage(-1); }
     if (e.key === 'p' || e.key === 'P') setTool('pen');
+    if (e.key === 'c' || e.key === 'C') setTool('pencil');
     if (e.key === 'e' || e.key === 'E') setTool('eraser');
     if (e.key === 'h' || e.key === 'H') setTool('highlighter');
     if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
