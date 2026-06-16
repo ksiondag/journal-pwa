@@ -22,8 +22,11 @@
   // View transform (zoom + rotation applied on top of auto-fit)
   let viewScale = 1;
   let viewRotation = 0;
+  let viewTranslateX = 0, viewTranslateY = 0;
   let gestureActive = false;
   let gestureStartDist = 0, gestureStartAngle = 0, gestureStartScale = 1, gestureStartRotation = 0;
+  let gestureStartMidX = 0, gestureStartMidY = 0, gestureStartTranslateX = 0, gestureStartTranslateY = 0;
+  let rotationLocked = false;
 
   // ── Elements ────────────────────────────────────────────
   const canvas = document.getElementById('draw-canvas');
@@ -93,15 +96,18 @@
 
   // ── View transform ──────────────────────────────────────
   function applyViewTransform() {
-    journalBook.style.transform = (viewScale === 1 && viewRotation === 0)
+    const identity = viewScale === 1 && viewRotation === 0 && viewTranslateX === 0 && viewTranslateY === 0;
+    journalBook.style.transform = identity
       ? ''
-      : `rotate(${viewRotation}deg) scale(${viewScale})`;
+      : `translate(${viewTranslateX}px, ${viewTranslateY}px) rotate(${viewRotation}deg) scale(${viewScale})`;
     updateCursorSize();
   }
 
   function resetView() {
     viewScale = 1;
     viewRotation = 0;
+    viewTranslateX = 0;
+    viewTranslateY = 0;
     journalBook.style.transform = '';
     updateCursorSize();
   }
@@ -404,6 +410,10 @@
     gestureStartAngle = Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
     gestureStartScale = viewScale;
     gestureStartRotation = viewRotation;
+    gestureStartMidX = (t1.clientX + t2.clientX) / 2;
+    gestureStartMidY = (t1.clientY + t2.clientY) / 2;
+    gestureStartTranslateX = viewTranslateX;
+    gestureStartTranslateY = viewTranslateY;
   }, { passive: false });
 
   journalWrap.addEventListener('touchmove', e => {
@@ -412,8 +422,12 @@
     const t1 = e.touches[0], t2 = e.touches[1];
     const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
     const angle = Math.atan2(t2.clientY - t1.clientY, t2.clientX - t1.clientX) * 180 / Math.PI;
+    const midX = (t1.clientX + t2.clientX) / 2;
+    const midY = (t1.clientY + t2.clientY) / 2;
     viewScale = Math.max(0.2, Math.min(5, gestureStartScale * (dist / gestureStartDist)));
-    viewRotation = gestureStartRotation + (angle - gestureStartAngle);
+    if (!rotationLocked) viewRotation = gestureStartRotation + (angle - gestureStartAngle);
+    viewTranslateX = gestureStartTranslateX + (midX - gestureStartMidX);
+    viewTranslateY = gestureStartTranslateY + (midY - gestureStartMidY);
     applyViewTransform();
   }, { passive: false });
 
@@ -429,6 +443,11 @@
   }, { passive: false });
 
   document.getElementById('btn-reset-view').addEventListener('click', resetView);
+
+  document.getElementById('btn-lock-rotation').addEventListener('click', () => {
+    rotationLocked = !rotationLocked;
+    document.getElementById('btn-lock-rotation').classList.toggle('active', rotationLocked);
+  });
 
   async function flipPage(dir) {
     if (dir === -1 && currentPage === 0) return;
