@@ -303,13 +303,13 @@
     return { x: cssX * docScale, y: cssY * docScale, pressure };
   }
 
-  function applyTool(targetCtx, pos, lineScale) {
-    if (tool === 'eraser') {
+  function applyTool(targetCtx, pos, lineScale, activeTool) {
+    if (activeTool === 'eraser') {
       targetCtx.globalCompositeOperation = 'destination-out';
       targetCtx.lineWidth = penSize * 8 * lineScale;
       targetCtx.strokeStyle = 'rgba(0,0,0,1)';
       targetCtx.globalAlpha = 1;
-    } else if (tool === 'highlighter') {
+    } else if (activeTool === 'highlighter') {
       targetCtx.globalCompositeOperation = 'multiply';
       targetCtx.lineWidth = penSize * 10 * lineScale;
       targetCtx.strokeStyle = penColor;
@@ -327,12 +327,14 @@
   function attachDrawHandlers(targetCanvas, targetCtx, getPageIndex) {
     let isDrawingLocal = false;
     let lastXLocal = 0, lastYLocal = 0;
+    let strokeTool = tool;
 
     targetCanvas.addEventListener('pointerdown', e => {
       if (e.pointerType === 'touch') return;
       e.preventDefault();
       targetCanvas.setPointerCapture(e.pointerId);
       isDrawingLocal = true;
+      strokeTool = (e.pointerType === 'pen' && (e.buttons & 32)) ? 'eraser' : tool;
       const pos = getPos(e, targetCanvas);
       lastXLocal = pos.x; lastYLocal = pos.y;
       targetCtx.beginPath();
@@ -346,7 +348,7 @@
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of events) {
         const p = getPos(ev, targetCanvas);
-        applyTool(targetCtx, p, lineScale);
+        applyTool(targetCtx, p, lineScale, strokeTool);
         targetCtx.beginPath();
         targetCtx.moveTo(lastXLocal, lastYLocal);
         targetCtx.lineTo(p.x, p.y);
