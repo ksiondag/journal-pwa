@@ -835,6 +835,7 @@
     let journals;
     try {
       const res = await fetch('/api/journals');
+      if (res.status === 401) { window.location.href = '/login'; return; }
       if (!res.ok) throw new Error();
       journals = await res.json();
       setServerStatus(true);
@@ -890,6 +891,11 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
   }
+
+  document.getElementById('btn-logout').addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST' });
+    window.location.href = '/login';
+  });
 
   // ── Service worker ───────────────────────────────────────
   if ('serviceWorker' in navigator) {

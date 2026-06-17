@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Journal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #F0EBE0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #1a1a1a;
+      padding: 24px;
+    }
+
+    .card {
+      background: #FAF7F0;
+      border-radius: 12px;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.08);
+      padding: 40px 36px 32px;
+      width: 100%;
+      max-width: 360px;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+      margin-bottom: 6px;
+      color: #1a1a1a;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 28px;
+    }
+
+    form { display: flex; flex-direction: column; gap: 14px; }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #555;
+    }
+
+    input[type="text"],
+    input[type="password"] {
+      padding: 9px 12px;
+      border: 1px solid rgba(0,0,0,0.18);
+      border-radius: 7px;
+      font-size: 15px;
+      font-family: inherit;
+      background: #fff;
+      color: #1a1a1a;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus { border-color: #6b5545; }
+
+    .error {
+      font-size: 13px;
+      color: #c0392b;
+      min-height: 18px;
+    }
+
+    button[type="submit"] {
+      margin-top: 4px;
+      padding: 10px;
+      background: #1a1a1a;
+      color: #FAF7F0;
+      border: none;
+      border-radius: 7px;
+      font-size: 15px;
+      font-family: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button[type="submit"]:hover { opacity: 0.85; }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .toggle {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 13px;
+      color: #888;
+    }
+    .toggle a {
+      color: #6b5545;
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .toggle a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Journal</h1>
+  <p class="subtitle">Sign in to continue</p>
+
+  <form id="form">
+    <label>Username
+      <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+    </label>
+    <label>Password
+      <input type="password" id="password" name="password" required>
+    </label>
+    <p class="error" id="error"></p>
+    <button type="submit" id="submit-btn">Sign in</button>
+  </form>
+</div>
+
+<script>
+  const form      = document.getElementById('form');
+  const errorEl   = document.getElementById('error');
+  const submitBtn = document.getElementById('submit-btn');
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    errorEl.textContent = '';
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Signing in…';
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value.trim(),
+          password: document.getElementById('password').value,
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) { errorEl.textContent = body.error || 'Something went wrong'; return; }
+      window.location.href = '/';
+    } catch (_) {
+      errorEl.textContent = 'Could not reach server';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Sign in';
+    }
+  });
+</script>
+</body>
+</html>

@@ -21,6 +21,11 @@ const db = new Database(path.join(__dirname, 'journal.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
+const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!cols.includes('password_hash')) {
+  db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+}
+
 // Resolve target journal: use provided ID, or the first journal in the DB
 let journalId = process.argv[3] || null;
 if (journalId) {
