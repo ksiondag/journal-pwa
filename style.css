@@ -31,6 +31,9 @@ html, body {
   background: var(--paper-dark);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ── Layout ─────────────────────────────────────────── */
@@ -54,6 +57,7 @@ html, body {
   z-index: 10;
   overflow-x: auto;
   scrollbar-width: none;
+  touch-action: pan-x; /* allow toolbar scroll, block zoom */
 }
 #toolbar::-webkit-scrollbar { display: none; }
 
@@ -65,6 +69,7 @@ html, body {
   padding: 16px;
   overflow: hidden;
   position: relative;
+  touch-action: none;
 }
 
 #journal-book {

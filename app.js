@@ -1,6 +1,12 @@
 (function() {
   'use strict';
 
+  // iOS Safari fires gesturestart/change/end before touchstart for pinch/rotate,
+  // bypassing our touch handlers. Block them so the browser never gets to zoom.
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(type =>
+    document.addEventListener(type, e => e.preventDefault(), { passive: false })
+  );
+
   // ── State ───────────────────────────────────────────────
   const DB_NAME = 'journal_db';
   const DB_VER = 1;
