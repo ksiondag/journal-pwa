@@ -1,5 +1,5 @@
-const CACHE = 'journal-v1';
-const ASSETS = ['/', '/index.html', '/manifest.json'];
+const CACHE = 'journal-v2';
+const ASSETS = ['/', '/index.html', '/app.js', '/style.css', '/manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
@@ -17,6 +17,8 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // API calls must always go to the network — never serve from cache
+  if (new URL(e.request.url).pathname.startsWith('/api/')) return;
   e.respondWith(
     caches.match(e.request).then(cached => {
       const network = fetch(e.request).then(res => {

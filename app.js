@@ -237,9 +237,11 @@
       const url = targetCanvas.toDataURL('image/png');
       pages[idx] = url;
       await dbPut(idx, url);
+      serverSave(idx, url);
     } else {
       delete pages[idx];
       await dbDelete(idx);
+      serverDeletePage(idx);
     }
   }
 
@@ -608,6 +610,7 @@
     ctx.clearRect(0, 0, SAVE_W, SAVE_H);
     delete pages[currentPage];
     await dbDelete(currentPage);
+    serverDeletePage(currentPage);
     toast('Page cleared');
   });
 
@@ -688,7 +691,10 @@
     await saveCurrentPages();
 
     const existingKeys = await dbGetAllKeys();
-    for (const key of existingKeys) await dbDelete(key);
+    for (const key of existingKeys) {
+      await dbDelete(key);
+      serverDeletePage(key);
+    }
     pages = {};
 
     let count = 0;
@@ -696,6 +702,7 @@
       const id = parseInt(key, 10);
       if (!isNaN(id) && typeof data === 'string' && data.startsWith('data:')) {
         await dbPut(id, data);
+        serverSave(id, data);
         count++;
       }
     }
@@ -781,6 +788,77 @@
     }
   }
 
+  // ── Server sync ──────────────────────────────────────────
+  const serverDot = document.getElementById('server-dot');
+
+  function setServerStatus(online) {
+    serverDot.className = online ? 'online' : 'offline';
+    serverDot.title = online ? 'Server: connected' : 'Server: offline (local only)';
+  }
+
+  async function serverSave(id, dataURL) {
+    try {
+      const res = await fetch(`/api/pages/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: dataURL }),
+      });
+      if (res.ok) setServerStatus(true);
+    } catch (_) {
+      setServerStatus(false);
+    }
+  }
+
+  function serverDeletePage(id) {
+    fetch(`/api/pages/${id}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  async function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function syncFromServer() {
+    let serverIds;
+    try {
+      const res = await fetch('/api/pages');
+      if (!res.ok) throw new Error();
+      serverIds = await res.json();
+      setServerStatus(true);
+    } catch (_) {
+      setServerStatus(false);
+      return;
+    }
+
+    const localKeys = new Set(await dbGetAllKeys());
+    const serverSet = new Set(serverIds);
+
+    // Download pages from server that aren't in local DB
+    for (const id of serverIds) {
+      if (!localKeys.has(id)) {
+        try {
+          const res = await fetch(`/api/pages/${id}`);
+          if (!res.ok) continue;
+          const dataURL = await blobToDataURL(await res.blob());
+          await dbPut(id, dataURL);
+          pages[id] = dataURL;
+        } catch (_) {}
+      }
+    }
+
+    // Push local pages that aren't on the server yet (made while offline)
+    for (const id of localKeys) {
+      if (!serverSet.has(id)) {
+        const dataURL = pages[id] || await dbGet(id);
+        if (dataURL) serverSave(id, dataURL);
+      }
+    }
+  }
+
   // ── Toast ────────────────────────────────────────────────
   let toastTimer;
   function toast(msg) {
@@ -814,6 +892,7 @@
   async function init() {
     db = await openDB();
     setCanvasSize();
+    await syncFromServer();
     await loadPage(0);
 
     window.addEventListener('resize', async () => {

@@ -1,0 +1,12 @@
+{
+  "name": "journal-pwa",
+  "version": "1.0.0",
+  "description": "Personal journal PWA with server sync",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
