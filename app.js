@@ -494,32 +494,6 @@
   attachDrawHandlers(canvas, ctx, () => currentPage);
   attachDrawHandlers(canvasLeft, ctxLeft, () => currentPage - 1);
 
-  // ── Touch gestures (finger swipe = page turn) ───────────
-  let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
-
-  function attachSwipeHandlers(el) {
-    el.addEventListener('touchstart', e => {
-      if (e.touches.length >= 2) return; // gesture handler takes over
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-      touchStartTime = Date.now();
-    }, { passive: true });
-
-    el.addEventListener('touchend', async e => {
-      if (gestureActive || !e.changedTouches.length) return;
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
-      const dt = Date.now() - touchStartTime;
-      if (Math.abs(dx) > 55 && dy < 90 && dt < 500) {
-        if (dx < 0) await flipPage(1);
-        else await flipPage(-1);
-      }
-    }, { passive: true });
-  }
-
-  attachSwipeHandlers(canvas);
-  attachSwipeHandlers(canvasLeft);
-
   // ── Pinch-to-zoom + rotation ─────────────────────────────
   journalWrap.addEventListener('touchstart', e => {
     if (e.touches.length !== 2) return;
