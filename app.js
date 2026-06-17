@@ -529,12 +529,22 @@
     if (e.touches.length < 2) gestureActive = false;
   }, { passive: true });
 
-  // Scroll-wheel zoom for desktop/trackpad
-  journalWrap.addEventListener('wheel', e => {
+  // Scroll-wheel zoom for desktop/trackpad.
+  // Also catches Apple Pencil double-tap zoom on iOS, which Safari delivers as a
+  // wheel event with ctrlKey:true — the same channel as trackpad pinch-to-zoom.
+  // Listening on document (not journalWrap) ensures no zoom event escapes,
+  // regardless of which element the pencil happens to land on.
+  document.addEventListener('wheel', e => {
     e.preventDefault();
-    viewScale = Math.max(0.2, Math.min(5, viewScale * (e.deltaY < 0 ? 1.1 : 0.9)));
-    applyViewTransform();
+    if (e.ctrlKey) {
+      // Pinch-to-zoom / pencil double-tap: apply to journal view
+      viewScale = Math.max(0.2, Math.min(5, viewScale * (e.deltaY < 0 ? 1.1 : 0.9)));
+      applyViewTransform();
+    }
   }, { passive: false });
+
+  // Belt-and-suspenders: prevent dblclick in case iOS Safari still fires it for pen inputs
+  document.addEventListener('dblclick', e => e.preventDefault());
 
   document.getElementById('btn-reset-view').addEventListener('click', resetView);
 
