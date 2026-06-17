@@ -553,16 +553,24 @@
     document.getElementById('btn-lock-rotation').classList.toggle('active', rotationLocked);
   });
 
+  let flipping = false;
+
   async function flipPage(dir) {
+    if (flipping) return;
     if (dir === -1 && currentPage === 0) return;
-    await saveCurrentPages();
+    flipping = true;
+    try {
+      await saveCurrentPages();
 
-    turnOverlay.classList.remove('flash-right', 'flash-left');
-    void turnOverlay.offsetWidth;
-    turnOverlay.classList.add(dir === 1 ? 'flash-right' : 'flash-left');
+      turnOverlay.classList.remove('flash-right', 'flash-left');
+      void turnOverlay.offsetWidth;
+      turnOverlay.classList.add(dir === 1 ? 'flash-right' : 'flash-left');
 
-    currentPage = Math.max(0, currentPage + (spreadMode ? dir * 2 : dir));
-    await loadPage(currentPage);
+      currentPage = Math.max(0, currentPage + (spreadMode ? dir * 2 : dir));
+      await loadPage(currentPage);
+    } finally {
+      flipping = false;
+    }
   }
 
   document.getElementById('btn-next').addEventListener('click', () => flipPage(1));
