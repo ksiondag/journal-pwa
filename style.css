@@ -212,6 +212,8 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .tool-btn:hover { background: rgba(0,0,0,0.06); }
+.tool-btn.danger { color: #c0392b; }
+.tool-btn.danger:hover { background: rgba(192,57,43,0.1); }
 .tool-btn.active {
   background: var(--ink);
   color: var(--paper);

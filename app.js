@@ -710,6 +710,13 @@
     toast(`Restored ${count} page${count !== 1 ? 's' : ''}`);
   });
 
+  document.getElementById('btn-clear-local').addEventListener('click', () => {
+    if (!confirm('Delete all local data? The page will reload and pull fresh data from the server.')) return;
+    db.close();
+    indexedDB.deleteDatabase(DB_NAME);
+    location.reload();
+  });
+
   // ── Spread toggle ────────────────────────────────────────
   document.getElementById('btn-spread').addEventListener('click', async () => {
     await saveCurrentPages();
