@@ -643,6 +643,68 @@
     toast('Page exported');
   });
 
+  document.getElementById('btn-backup').addEventListener('click', async () => {
+    await saveCurrentPages();
+    const keys = await dbGetAllKeys();
+    const backup = { version: 1, pages: {} };
+    for (const key of keys) {
+      const data = await dbGet(key);
+      if (data) backup.pages[key] = data;
+    }
+    const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast(`Backed up ${keys.length} page${keys.length !== 1 ? 's' : ''}`);
+  });
+
+  document.getElementById('btn-restore').addEventListener('click', () => {
+    document.getElementById('restore-input').click();
+  });
+
+  document.getElementById('restore-input').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+
+    let backup;
+    try {
+      backup = JSON.parse(await file.text());
+    } catch {
+      toast('Invalid backup file');
+      return;
+    }
+
+    if (!backup.pages || typeof backup.pages !== 'object') {
+      toast('Invalid backup file');
+      return;
+    }
+
+    if (!confirm('Restore journal? All current pages will be replaced.')) return;
+
+    await saveCurrentPages();
+
+    const existingKeys = await dbGetAllKeys();
+    for (const key of existingKeys) await dbDelete(key);
+    pages = {};
+
+    let count = 0;
+    for (const [key, data] of Object.entries(backup.pages)) {
+      const id = parseInt(key, 10);
+      if (!isNaN(id) && typeof data === 'string' && data.startsWith('data:')) {
+        await dbPut(id, data);
+        count++;
+      }
+    }
+
+    currentPage = 0;
+    await loadPage(currentPage);
+    toast(`Restored ${count} page${count !== 1 ? 's' : ''}`);
+  });
+
   // ── Spread toggle ────────────────────────────────────────
   document.getElementById('btn-spread').addEventListener('click', async () => {
     await saveCurrentPages();
