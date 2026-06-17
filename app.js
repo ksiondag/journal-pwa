@@ -795,15 +795,17 @@
 
   // ── Server sync ──────────────────────────────────────────
   const serverDot = document.getElementById('server-dot');
+  let currentJournalId = null;
 
   function setServerStatus(online) {
     serverDot.className = online ? 'online' : 'offline';
     serverDot.title = online ? 'Server: connected' : 'Server: offline (local only)';
   }
 
-  async function serverSave(id, dataURL) {
+  async function serverSave(pageNumber, dataURL) {
+    if (!currentJournalId) return;
     try {
-      const res = await fetch(`/api/pages/${id}`, {
+      const res = await fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ data: dataURL }),
@@ -814,8 +816,9 @@
     }
   }
 
-  function serverDeletePage(id) {
-    fetch(`/api/pages/${id}`, { method: 'DELETE' }).catch(() => {});
+  function serverDeletePage(pageNumber) {
+    if (!currentJournalId) return;
+    fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, { method: 'DELETE' }).catch(() => {});
   }
 
   async function blobToDataURL(blob) {
@@ -828,38 +831,52 @@
   }
 
   async function syncFromServer() {
-    let serverIds;
+    // Fetch journal list and use the first journal
+    let journals;
     try {
-      const res = await fetch('/api/pages');
+      const res = await fetch('/api/journals');
       if (!res.ok) throw new Error();
-      serverIds = await res.json();
+      journals = await res.json();
       setServerStatus(true);
+    } catch (_) {
+      setServerStatus(false);
+      return;
+    }
+    if (!journals.length) return;
+    currentJournalId = journals[0].id;
+
+    // Fetch page list for this journal
+    let serverPages;
+    try {
+      const res = await fetch(`/api/journals/${currentJournalId}/pages`);
+      if (!res.ok) throw new Error();
+      serverPages = await res.json();
     } catch (_) {
       setServerStatus(false);
       return;
     }
 
     const localKeys = new Set(await dbGetAllKeys());
-    const serverSet = new Set(serverIds);
+    const serverPageNumbers = new Set(serverPages.map(p => p.page_number));
 
     // Download pages from server that aren't in local DB
-    for (const id of serverIds) {
-      if (!localKeys.has(id)) {
+    for (const { page_number } of serverPages) {
+      if (!localKeys.has(page_number)) {
         try {
-          const res = await fetch(`/api/pages/${id}`);
+          const res = await fetch(`/api/journals/${currentJournalId}/pages/${page_number}`);
           if (!res.ok) continue;
           const dataURL = await blobToDataURL(await res.blob());
-          await dbPut(id, dataURL);
-          pages[id] = dataURL;
+          await dbPut(page_number, dataURL);
+          pages[page_number] = dataURL;
         } catch (_) {}
       }
     }
 
     // Push local pages that aren't on the server yet (made while offline)
-    for (const id of localKeys) {
-      if (!serverSet.has(id)) {
-        const dataURL = pages[id] || await dbGet(id);
-        if (dataURL) serverSave(id, dataURL);
+    for (const pageNumber of localKeys) {
+      if (!serverPageNumbers.has(pageNumber)) {
+        const dataURL = pages[pageNumber] || await dbGet(pageNumber);
+        if (dataURL) serverSave(pageNumber, dataURL);
       }
     }
   }

@@ -1,11 +1,13 @@
 'use strict';
 
+const Database = require('better-sqlite3');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const file = process.argv[2];
 if (!file) {
-  console.error('Usage: node import-backup.js <journal-backup.json>');
+  console.error('Usage: node import-backup.js <journal-backup.json> [journal-id]');
   process.exit(1);
 }
 
@@ -15,16 +17,43 @@ if (!backup.pages || typeof backup.pages !== 'object') {
   process.exit(1);
 }
 
-const DATA_DIR = path.join(__dirname, 'data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
+const db = new Database(path.join(__dirname, 'journal.db'));
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
-const PREFIX = 'data:image/png;base64,';
-let count = 0;
-for (const [key, data] of Object.entries(backup.pages)) {
-  const id = parseInt(key, 10);
-  if (isNaN(id) || id < 0 || typeof data !== 'string' || !data.startsWith(PREFIX)) continue;
-  fs.writeFileSync(path.join(DATA_DIR, `${id}.png`), Buffer.from(data.slice(PREFIX.length), 'base64'));
-  count++;
+// Resolve target journal: use provided ID, or the first journal in the DB
+let journalId = process.argv[3] || null;
+if (journalId) {
+  if (!db.prepare('SELECT id FROM journals WHERE id = ?').get(journalId)) {
+    console.error(`Journal ${journalId} not found.`);
+    process.exit(1);
+  }
+} else {
+  const journal = db.prepare('SELECT id FROM journals LIMIT 1').get();
+  if (!journal) {
+    console.error('No journals found. Start the server once to create the default journal.');
+    process.exit(1);
+  }
+  journalId = journal.id;
 }
 
-console.log(`Imported ${count} page${count !== 1 ? 's' : ''} → data/`);
+const PREFIX = 'data:image/png;base64,';
+const upsert = db.prepare(`
+  INSERT INTO pages (id, journal_id, page_number, data)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(journal_id, page_number)
+  DO UPDATE SET data = excluded.data, updated_at = datetime('now')
+`);
+
+let count = 0;
+db.transaction(() => {
+  for (const [key, data] of Object.entries(backup.pages)) {
+    const pageNumber = parseInt(key, 10);
+    if (isNaN(pageNumber) || pageNumber < 0) continue;
+    if (typeof data !== 'string' || !data.startsWith(PREFIX)) continue;
+    upsert.run(crypto.randomUUID(), journalId, pageNumber, Buffer.from(data.slice(PREFIX.length), 'base64'));
+    count++;
+  }
+})();
+
+console.log(`Imported ${count} page${count !== 1 ? 's' : ''} → journal ${journalId}`);
