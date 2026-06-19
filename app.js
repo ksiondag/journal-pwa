@@ -73,10 +73,29 @@
     });
   }
 
-  function dbPut(id, data) {
+  function dbGetRecord(id) {
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  function dbPut(id, data, updatedAt = null) {
     return new Promise((resolve) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put({ id, data });
+      const store = tx.objectStore(STORE);
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const now = updatedAt || new Date().toISOString();
+        store.put({
+          id,
+          data,
+          created_at: getReq.result ? getReq.result.created_at : now,
+          updated_at: now,
+        });
+      };
       tx.oncomplete = resolve;
       tx.onerror = resolve;
     });
@@ -860,16 +879,22 @@
     const localKeys = new Set(await dbGetAllKeys());
     const serverPageNumbers = new Set(serverPages.map(p => p.page_number));
 
-    // Download pages from server that aren't in local DB
-    for (const { page_number } of serverPages) {
-      if (!localKeys.has(page_number)) {
+    for (const { page_number, updated_at: serverUpdatedAt } of serverPages) {
+      const localRecord = localKeys.has(page_number) ? await dbGetRecord(page_number) : null;
+      const localUpdatedAt = localRecord && localRecord.updated_at;
+      const serverNewer = !localUpdatedAt || new Date(serverUpdatedAt) > new Date(localUpdatedAt);
+
+      if (serverNewer) {
         try {
           const res = await fetch(`/api/journals/${currentJournalId}/pages/${page_number}`);
           if (!res.ok) continue;
           const dataURL = await blobToDataURL(await res.blob());
-          await dbPut(page_number, dataURL);
+          await dbPut(page_number, dataURL, serverUpdatedAt);
           pages[page_number] = dataURL;
         } catch (_) {}
+      } else {
+        // Local is newer — push to server
+        if (localRecord && localRecord.data) serverSave(page_number, localRecord.data);
       }
     }
 
