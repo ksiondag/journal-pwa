@@ -624,6 +624,7 @@
   sizeSlider.addEventListener('input', () => { penSize = parseFloat(sizeSlider.value); updateCursorSize(); });
 
   document.getElementById('btn-clear').addEventListener('click', async () => {
+    if (!await showConfirm('Clear this page?')) return;
     ctx.clearRect(0, 0, SAVE_W, SAVE_H);
     delete pages[currentPage];
     await dbDelete(currentPage);
@@ -905,6 +906,28 @@
         if (dataURL) serverSave(pageNumber, dataURL);
       }
     }
+  }
+
+  // ── Confirm dialog ───────────────────────────────────────
+  function showConfirm(message) {
+    return new Promise(resolve => {
+      const overlay = document.getElementById('confirm-overlay');
+      document.getElementById('confirm-message').textContent = message;
+      overlay.hidden = false;
+      function finish(result) {
+        overlay.hidden = true;
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        resolve(result);
+      }
+      const okBtn = document.getElementById('confirm-ok');
+      const cancelBtn = document.getElementById('confirm-cancel');
+      function onOk() { finish(true); }
+      function onCancel() { finish(false); }
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      overlay.addEventListener('click', e => { if (e.target === overlay) finish(false); }, { once: true });
+    });
   }
 
   // ── Toast ────────────────────────────────────────────────

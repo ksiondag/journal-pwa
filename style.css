@@ -282,6 +282,52 @@ html, body {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ── Confirm dialog ──────────────────────────────────── */
+#confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  backdrop-filter: blur(2px);
+}
+#confirm-overlay[hidden] { display: none; }
+#confirm-dialog {
+  background: var(--paper);
+  border-radius: 12px;
+  padding: 24px 28px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.22);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 220px;
+}
+#confirm-message {
+  font-size: 15px;
+  color: var(--ink);
+  text-align: center;
+}
+#confirm-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+#confirm-buttons button {
+  padding: 7px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-border);
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+#confirm-buttons button:hover { background: var(--paper-dark); }
+#confirm-buttons button.danger { color: #c0392b; border-color: rgba(192,57,43,0.3); }
+#confirm-buttons button.danger:hover { background: rgba(192,57,43,0.08); }
+
 /* ── Thumbnail strip ─────────────────────────────────── */
 #thumb-panel {
   position: fixed;
