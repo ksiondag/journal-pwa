@@ -117,12 +117,21 @@
     <p class="error" id="error"></p>
     <button type="submit" id="submit-btn">Sign in</button>
   </form>
+  <div class="toggle">
+    <a href="#" id="guest-link">Continue without account</a>
+  </div>
 </div>
 
 <script>
   const form      = document.getElementById('form');
   const errorEl   = document.getElementById('error');
   const submitBtn = document.getElementById('submit-btn');
+
+  document.getElementById('guest-link').addEventListener('click', e => {
+    e.preventDefault();
+    localStorage.setItem('guestMode', 'true');
+    window.location.href = '/guest';
+  });
 
   form.addEventListener('submit', async e => {
     e.preventDefault();

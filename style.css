@@ -380,6 +380,7 @@ html, body {
 }
 #server-dot.online  { background: #5cb85c; }
 #server-dot.offline { background: var(--ui-border); }
+#server-dot.local   { background: #aaa; }
 
 #thumb-close {
   position: absolute;

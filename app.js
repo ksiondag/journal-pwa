@@ -24,6 +24,8 @@
   const pendingSaves = new Map(); // canvas el → timeoutId
   let thumbPanelOpen = false;
 
+  const GUEST_MODE = localStorage.getItem('guestMode') === 'true';
+
   // View transform (zoom + rotation applied on top of auto-fit)
   let viewScale = 1;
   let viewRotation = 0;
@@ -52,6 +54,27 @@
   const svgLinesLeft = document.getElementById('page-lines-left');
   const pageLeft = document.getElementById('page-left');
   const cursorRing = document.getElementById('cursor-ring');
+
+  // ── Guest mode helpers (client-only, no server sync) ────
+  const GUEST_JOURNALS_KEY = 'guest_journals';
+  function getGuestJournals() {
+    try { return JSON.parse(localStorage.getItem(GUEST_JOURNALS_KEY) || '[]'); } catch { return []; }
+  }
+  function saveGuestJournals(j) { localStorage.setItem(GUEST_JOURNALS_KEY, JSON.stringify(j)); }
+  function readGuestThumb(journalId) {
+    return new Promise(resolve => {
+      const req = indexedDB.open(`journal_db_${journalId}`, DB_VER);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: 'id' });
+      req.onsuccess = e => {
+        const d = e.target.result;
+        const tx = d.transaction(STORE, 'readonly');
+        const r = tx.objectStore(STORE).get(0);
+        r.onsuccess = () => { d.close(); resolve(r.result?.data || null); };
+        r.onerror = () => { d.close(); resolve(null); };
+      };
+      req.onerror = () => resolve(null);
+    });
+  }
 
   // ── IndexedDB (per-journal) ──────────────────────────────
   let currentJournalId = null;
@@ -738,7 +761,10 @@
   });
 
   document.getElementById('btn-clear-local').addEventListener('click', () => {
-    if (!confirm('Delete all local data? The page will reload and pull fresh data from the server.')) return;
+    const msg = GUEST_MODE
+      ? 'Delete all local data for this journal? This cannot be undone.'
+      : 'Delete all local data? The page will reload and pull fresh data from the server.';
+    if (!confirm(msg)) return;
     db.close();
     db = null;
     indexedDB.deleteDatabase(journalDbName());
@@ -830,7 +856,7 @@
   }
 
   async function serverSave(pageNumber, dataURL) {
-    if (!currentJournalId) return;
+    if (!currentJournalId || GUEST_MODE) return;
     try {
       const res = await fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, {
         method: 'PUT',
@@ -844,7 +870,7 @@
   }
 
   function serverDeletePage(pageNumber) {
-    if (!currentJournalId) return;
+    if (!currentJournalId || GUEST_MODE) return;
     fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, { method: 'DELETE' }).catch(() => {});
   }
 
@@ -858,7 +884,7 @@
   }
 
   async function syncFromServer() {
-    if (!currentJournalId) return;
+    if (!currentJournalId || GUEST_MODE) return;
 
     let serverPages;
     try {
@@ -947,29 +973,38 @@
     grid.innerHTML = '<div class="journals-loading">Loading…</div>';
 
     let journals;
-    try {
-      const res = await fetch('/api/journals');
-      if (res.status === 401) { window.location.href = '/login'; return; }
-      if (!res.ok) throw new Error();
-      journals = await res.json();
-    } catch {
-      grid.innerHTML = '<div class="journals-error">Could not load journals.</div>';
-      return;
-    }
-
-    // Auto-create a default journal for first-time users
-    if (!journals.length) {
+    if (GUEST_MODE) {
+      journals = getGuestJournals();
+      if (!journals.length) {
+        const j = { id: crypto.randomUUID(), name: 'My Journal', created_at: new Date().toISOString() };
+        journals = [j];
+        saveGuestJournals(journals);
+      }
+    } else {
       try {
-        const res = await fetch('/api/journals', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'My Journal' }),
-        });
-        if (res.ok) {
-          const j = await res.json();
-          journals = [j];
-        }
-      } catch { /* show empty state */ }
+        const res = await fetch('/api/journals');
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) throw new Error();
+        journals = await res.json();
+      } catch {
+        grid.innerHTML = '<div class="journals-error">Could not load journals.</div>';
+        return;
+      }
+
+      // Auto-create a default journal for first-time users
+      if (!journals.length) {
+        try {
+          const res = await fetch('/api/journals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'My Journal' }),
+          });
+          if (res.ok) {
+            const j = await res.json();
+            journals = [j];
+          }
+        } catch { /* show empty state */ }
+      }
     }
 
     grid.innerHTML = '';
@@ -988,16 +1023,28 @@
       // Load first-page thumbnail asynchronously
       (async () => {
         try {
-          const imgRes = await fetch(`/api/journals/${j.id}/pages/0`);
-          if (imgRes.ok) {
-            const blob = await imgRes.blob();
-            const url = URL.createObjectURL(blob);
-            await new Promise(r => {
-              const img = new Image();
-              img.onload = () => { tctx.drawImage(img, 0, 0, 148, 210); URL.revokeObjectURL(url); r(); };
-              img.onerror = () => { URL.revokeObjectURL(url); r(); };
-              img.src = url;
-            });
+          if (GUEST_MODE) {
+            const dataURL = await readGuestThumb(j.id);
+            if (dataURL) {
+              await new Promise(r => {
+                const img = new Image();
+                img.onload = () => { tctx.drawImage(img, 0, 0, 148, 210); r(); };
+                img.onerror = r;
+                img.src = dataURL;
+              });
+            }
+          } else {
+            const imgRes = await fetch(`/api/journals/${j.id}/pages/0`);
+            if (imgRes.ok) {
+              const blob = await imgRes.blob();
+              const url = URL.createObjectURL(blob);
+              await new Promise(r => {
+                const img = new Image();
+                img.onload = () => { tctx.drawImage(img, 0, 0, 148, 210); URL.revokeObjectURL(url); r(); };
+                img.onerror = () => { URL.revokeObjectURL(url); r(); };
+                img.src = url;
+              });
+            }
           }
         } catch { /* no thumbnail */ }
       })();
@@ -1043,6 +1090,14 @@
   async function createNewJournal() {
     const name = await showNameDialog('New Journal', 'New Journal', 'Create');
     if (!name) return;
+    if (GUEST_MODE) {
+      const j = { id: crypto.randomUUID(), name, created_at: new Date().toISOString() };
+      const journals = getGuestJournals();
+      journals.push(j);
+      saveGuestJournals(journals);
+      openJournal(j.id, j.name);
+      return;
+    }
     try {
       const res = await fetch('/api/journals', {
         method: 'POST',
@@ -1078,6 +1133,14 @@
       close();
       const name = await showNameDialog('Rename Journal', journal.name, 'Rename');
       if (!name) return;
+      if (GUEST_MODE) {
+        const journals = getGuestJournals();
+        const entry = journals.find(j => j.id === journal.id);
+        if (entry) { entry.name = name; saveGuestJournals(journals); }
+        await renderJournals();
+        toast('Journal renamed');
+        return;
+      }
       try {
         const res = await fetch(`/api/journals/${journal.id}`, {
           method: 'PATCH',
@@ -1094,6 +1157,13 @@
     async function onDelete() {
       close();
       if (!await showConfirm(`Delete "${journal.name}"? This cannot be undone.`, 'Delete')) return;
+      if (GUEST_MODE) {
+        saveGuestJournals(getGuestJournals().filter(j => j.id !== journal.id));
+        indexedDB.deleteDatabase(`journal_db_${journal.id}`);
+        await renderJournals();
+        toast('Journal deleted');
+        return;
+      }
       try {
         const res = await fetch(`/api/journals/${journal.id}`, { method: 'DELETE' });
         if (res.ok) {
@@ -1182,11 +1252,13 @@
   }
 
   document.getElementById('btn-logout').addEventListener('click', async () => {
+    if (GUEST_MODE) { localStorage.removeItem('guestMode'); window.location.href = '/login'; return; }
     await fetch('/auth/logout', { method: 'POST' });
     window.location.href = '/login';
   });
 
   document.getElementById('btn-logout-from-journals').addEventListener('click', async () => {
+    if (GUEST_MODE) { localStorage.removeItem('guestMode'); window.location.href = '/login'; return; }
     await fetch('/auth/logout', { method: 'POST' });
     window.location.href = '/login';
   });
@@ -1216,6 +1288,10 @@
   // ── Init ─────────────────────────────────────────────────
   async function init() {
     document.body.dataset.view = 'journals';
+    if (GUEST_MODE) {
+      serverDot.className = 'local';
+      serverDot.title = 'Local only — not synced to server';
+    }
     await renderJournals();
 
     window.addEventListener('resize', async () => {
