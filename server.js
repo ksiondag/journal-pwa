@@ -263,6 +263,20 @@ app.delete('/api/journals/:journalId/pages/:pageNumber', requireAuth, (req, res)
   res.json({ ok: true });
 });
 
+app.patch('/api/journals/:journalId', requireAuth, (req, res) => {
+  if (!ownJournal(req, res)) return;
+  const { name } = req.body;
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'name required' });
+  db.prepare('UPDATE journals SET name = ? WHERE id = ?').run(name.trim(), req.params.journalId);
+  res.json({ id: req.params.journalId, name: name.trim() });
+});
+
+app.delete('/api/journals/:journalId', requireAuth, (req, res) => {
+  if (!ownJournal(req, res)) return;
+  db.prepare('DELETE FROM journals WHERE id = ?').run(req.params.journalId);
+  res.json({ ok: true });
+});
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {

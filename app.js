@@ -8,7 +8,6 @@
   );
 
   // ── State ───────────────────────────────────────────────
-  const DB_NAME = 'journal_db';
   const DB_VER = 1;
   const STORE = 'pages';
   const PAGE_W = 560;   // reference page width; dot spacing scales proportionally with this
@@ -54,10 +53,15 @@
   const pageLeft = document.getElementById('page-left');
   const cursorRing = document.getElementById('cursor-ring');
 
-  // ── IndexedDB ───────────────────────────────────────────
+  // ── IndexedDB (per-journal) ──────────────────────────────
+  let currentJournalId = null;
+  let currentJournalName = null;
+
+  function journalDbName() { return `journal_db_${currentJournalId}`; }
+
   function openDB() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VER);
+      const req = indexedDB.open(journalDbName(), DB_VER);
       req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: 'id' });
       req.onsuccess = e => resolve(e.target.result);
       req.onerror = () => reject(req.error);
@@ -273,6 +277,7 @@
   async function saveCurrentPages() {
     for (const timer of pendingSaves.values()) clearTimeout(timer);
     pendingSaves.clear();
+    if (!db) return;
     await saveCanvas(currentPage, canvas, ctx);
     if (spreadMode) {
       const leftIdx = currentPage - 1;
@@ -554,6 +559,7 @@
   // Listening on document (not journalWrap) ensures no zoom event escapes,
   // regardless of which element the pencil happens to land on.
   document.addEventListener('wheel', e => {
+    if (document.body.dataset.view !== 'editor') return;
     e.preventDefault();
     if (e.ctrlKey) {
       // Pinch-to-zoom / pencil double-tap: apply to journal view
@@ -675,7 +681,8 @@
     const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const safeName = (currentJournalName || 'journal').replace(/[^a-z0-9]/gi, '-').toLowerCase();
+    link.download = `journal-backup-${safeName}-${new Date().toISOString().slice(0, 10)}.json`;
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);
@@ -733,7 +740,8 @@
   document.getElementById('btn-clear-local').addEventListener('click', () => {
     if (!confirm('Delete all local data? The page will reload and pull fresh data from the server.')) return;
     db.close();
-    indexedDB.deleteDatabase(DB_NAME);
+    db = null;
+    indexedDB.deleteDatabase(journalDbName());
     location.reload();
   });
 
@@ -815,7 +823,6 @@
 
   // ── Server sync ──────────────────────────────────────────
   const serverDot = document.getElementById('server-dot');
-  let currentJournalId = null;
 
   function setServerStatus(online) {
     serverDot.className = online ? 'online' : 'offline';
@@ -851,27 +858,15 @@
   }
 
   async function syncFromServer() {
-    // Fetch journal list and use the first journal
-    let journals;
-    try {
-      const res = await fetch('/api/journals');
-      if (res.status === 401) { window.location.href = '/login'; return; }
-      if (!res.ok) throw new Error();
-      journals = await res.json();
-      setServerStatus(true);
-    } catch (_) {
-      setServerStatus(false);
-      return;
-    }
-    if (!journals.length) return;
-    currentJournalId = journals[0].id;
+    if (!currentJournalId) return;
 
-    // Fetch page list for this journal
     let serverPages;
     try {
       const res = await fetch(`/api/journals/${currentJournalId}/pages`);
+      if (res.status === 401) { window.location.href = '/login'; return; }
       if (!res.ok) throw new Error();
       serverPages = await res.json();
+      setServerStatus(true);
     } catch (_) {
       setServerStatus(false);
       return;
@@ -908,11 +903,221 @@
     }
   }
 
+  // ── Journals screen ──────────────────────────────────────
+
+  async function showJournalsScreen() {
+    if (thumbPanelOpen) {
+      thumbPanelOpen = false;
+      thumbPanel.classList.remove('open');
+    }
+    if (db) await saveCurrentPages();
+    document.body.dataset.view = 'journals';
+    await renderJournals();
+  }
+
+  async function openJournal(id, name) {
+    currentJournalId = id;
+    currentJournalName = name;
+    pages = {};
+    currentPage = 0;
+
+    if (spreadMode) {
+      spreadMode = false;
+      journalBook.classList.remove('spread');
+      document.getElementById('btn-spread').classList.remove('active');
+    }
+    resetView();
+
+    if (db) { db.close(); db = null; }
+    db = await openDB();
+
+    document.getElementById('journal-name-label').textContent = name;
+    document.body.dataset.view = 'editor';
+
+    // Wait one frame so the browser lays out the now-visible canvas before sizing it
+    await new Promise(r => requestAnimationFrame(r));
+
+    setCanvasSize();
+    await syncFromServer();
+    await loadPage(0);
+  }
+
+  async function renderJournals() {
+    const grid = document.getElementById('journals-grid');
+    grid.innerHTML = '<div class="journals-loading">Loading…</div>';
+
+    let journals;
+    try {
+      const res = await fetch('/api/journals');
+      if (res.status === 401) { window.location.href = '/login'; return; }
+      if (!res.ok) throw new Error();
+      journals = await res.json();
+    } catch {
+      grid.innerHTML = '<div class="journals-error">Could not load journals.</div>';
+      return;
+    }
+
+    // Auto-create a default journal for first-time users
+    if (!journals.length) {
+      try {
+        const res = await fetch('/api/journals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'My Journal' }),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          journals = [j];
+        }
+      } catch { /* show empty state */ }
+    }
+
+    grid.innerHTML = '';
+
+    for (const j of journals) {
+      const card = document.createElement('div');
+      card.className = 'journal-card';
+
+      const tc = document.createElement('canvas');
+      tc.className = 'journal-card-thumb';
+      tc.width = 148; tc.height = 210;
+      const tctx = tc.getContext('2d');
+      tctx.fillStyle = '#FAF7F0';
+      tctx.fillRect(0, 0, 148, 210);
+
+      // Load first-page thumbnail asynchronously
+      (async () => {
+        try {
+          const imgRes = await fetch(`/api/journals/${j.id}/pages/0`);
+          if (imgRes.ok) {
+            const blob = await imgRes.blob();
+            const url = URL.createObjectURL(blob);
+            await new Promise(r => {
+              const img = new Image();
+              img.onload = () => { tctx.drawImage(img, 0, 0, 148, 210); URL.revokeObjectURL(url); r(); };
+              img.onerror = () => { URL.revokeObjectURL(url); r(); };
+              img.src = url;
+            });
+          }
+        } catch { /* no thumbnail */ }
+      })();
+
+      const footer = document.createElement('div');
+      footer.className = 'journal-card-footer';
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'journal-card-name';
+      nameEl.textContent = j.name;
+      nameEl.title = j.name;
+
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'journal-card-menu-btn';
+      menuBtn.title = 'Journal options';
+      menuBtn.textContent = '•••';
+
+      footer.appendChild(nameEl);
+      footer.appendChild(menuBtn);
+      card.appendChild(tc);
+      card.appendChild(footer);
+
+      card.addEventListener('click', e => {
+        if (menuBtn.contains(e.target)) return;
+        openJournal(j.id, j.name);
+      });
+      menuBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        showJournalActions(j);
+      });
+
+      grid.appendChild(card);
+    }
+
+    // New journal card
+    const newCard = document.createElement('div');
+    newCard.className = 'journal-card journal-card-new';
+    newCard.innerHTML = '<span class="journal-card-new-icon">+</span><span>New Journal</span>';
+    newCard.addEventListener('click', createNewJournal);
+    grid.appendChild(newCard);
+  }
+
+  async function createNewJournal() {
+    const name = await showNameDialog('New Journal', 'New Journal', 'Create');
+    if (!name) return;
+    try {
+      const res = await fetch('/api/journals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error();
+      const journal = await res.json();
+      openJournal(journal.id, journal.name);
+    } catch {
+      toast('Failed to create journal');
+    }
+  }
+
+  function showJournalActions(journal) {
+    const overlay = document.getElementById('journal-actions-overlay');
+    document.getElementById('journal-actions-name').textContent = journal.name;
+    overlay.hidden = false;
+
+    const renameBtn = document.getElementById('journal-actions-rename');
+    const deleteBtn = document.getElementById('journal-actions-delete');
+    const cancelBtn = document.getElementById('journal-actions-cancel');
+
+    function close() {
+      overlay.hidden = true;
+      renameBtn.removeEventListener('click', onRename);
+      deleteBtn.removeEventListener('click', onDelete);
+      cancelBtn.removeEventListener('click', close);
+      overlay.removeEventListener('click', onOverlayClick);
+    }
+
+    async function onRename() {
+      close();
+      const name = await showNameDialog('Rename Journal', journal.name, 'Rename');
+      if (!name) return;
+      try {
+        const res = await fetch(`/api/journals/${journal.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (res.ok) {
+          await renderJournals();
+          toast('Journal renamed');
+        }
+      } catch { toast('Failed to rename journal'); }
+    }
+
+    async function onDelete() {
+      close();
+      if (!await showConfirm(`Delete "${journal.name}"? This cannot be undone.`, 'Delete')) return;
+      try {
+        const res = await fetch(`/api/journals/${journal.id}`, { method: 'DELETE' });
+        if (res.ok) {
+          indexedDB.deleteDatabase(`journal_db_${journal.id}`);
+          await renderJournals();
+          toast('Journal deleted');
+        }
+      } catch { toast('Failed to delete journal'); }
+    }
+
+    function onOverlayClick(e) { if (e.target === overlay) close(); }
+
+    renameBtn.addEventListener('click', onRename);
+    deleteBtn.addEventListener('click', onDelete);
+    cancelBtn.addEventListener('click', close);
+    overlay.addEventListener('click', onOverlayClick);
+  }
+
   // ── Confirm dialog ───────────────────────────────────────
-  function showConfirm(message) {
+  function showConfirm(message, okLabel = 'Clear') {
     return new Promise(resolve => {
       const overlay = document.getElementById('confirm-overlay');
       document.getElementById('confirm-message').textContent = message;
+      document.getElementById('confirm-ok').textContent = okLabel;
       overlay.hidden = false;
       function finish(result) {
         overlay.hidden = true;
@@ -927,6 +1132,42 @@
       okBtn.addEventListener('click', onOk);
       cancelBtn.addEventListener('click', onCancel);
       overlay.addEventListener('click', e => { if (e.target === overlay) finish(false); }, { once: true });
+    });
+  }
+
+  // ── Name input dialog ────────────────────────────────────
+  function showNameDialog(title, initialValue, okLabel) {
+    return new Promise(resolve => {
+      const overlay = document.getElementById('name-dialog-overlay');
+      document.getElementById('name-dialog-title').textContent = title;
+      const input = document.getElementById('name-dialog-input');
+      input.value = initialValue || '';
+      document.getElementById('name-dialog-ok').textContent = okLabel || 'OK';
+      overlay.hidden = false;
+      setTimeout(() => { input.focus(); input.select(); }, 50);
+
+      const okBtn = document.getElementById('name-dialog-ok');
+      const cancelBtn = document.getElementById('name-dialog-cancel');
+
+      function finish(value) {
+        overlay.hidden = true;
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        input.removeEventListener('keydown', onKeydown);
+        resolve(value);
+      }
+
+      function onOk() { finish(input.value.trim() || null); }
+      function onCancel() { finish(null); }
+      function onKeydown(e) {
+        if (e.key === 'Enter') onOk();
+        if (e.key === 'Escape') onCancel();
+      }
+
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+      input.addEventListener('keydown', onKeydown);
+      overlay.addEventListener('click', e => { if (e.target === overlay) onCancel(); }, { once: true });
     });
   }
 
@@ -945,6 +1186,13 @@
     window.location.href = '/login';
   });
 
+  document.getElementById('btn-logout-from-journals').addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST' });
+    window.location.href = '/login';
+  });
+
+  document.getElementById('btn-back-to-journals').addEventListener('click', showJournalsScreen);
+
   // ── Service worker ───────────────────────────────────────
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -953,6 +1201,7 @@
   // ── Keyboard shortcuts ───────────────────────────────────
   document.addEventListener('keydown', async e => {
     if (e.target.tagName === 'INPUT') return;
+    if (document.body.dataset.view !== 'editor') return;
     if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); await flipPage(1); }
     if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); await flipPage(-1); }
     if (e.key === 'p' || e.key === 'P') setTool('pen');
@@ -966,15 +1215,15 @@
 
   // ── Init ─────────────────────────────────────────────────
   async function init() {
-    db = await openDB();
-    setCanvasSize();
-    await syncFromServer();
-    await loadPage(0);
+    document.body.dataset.view = 'journals';
+    await renderJournals();
 
     window.addEventListener('resize', async () => {
-      await saveCurrentPages();
-      setCanvasSize();
-      await loadPage(currentPage);
+      if (document.body.dataset.view === 'editor') {
+        await saveCurrentPages();
+        setCanvasSize();
+        await loadPage(currentPage);
+      }
     });
   }
 
