@@ -1,0 +1,16 @@
+[Unit]
+Description=Journal PWA
+After=network.target
+
+[Service]
+Type=simple
+User=rory
+WorkingDirectory=/home/rory/Projects/journal-pwa
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target

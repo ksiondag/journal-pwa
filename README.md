@@ -1,35 +1,6 @@
 # Journal PWA
 
-A pen-first digital journal that installs as a native-feeling app on your touchscreen laptop.
-
-## Quick Start (2 minutes)
-
-You need a local HTTPS server for the PWA install prompt to appear.
-The easiest option is `npx serve` or Python's built-in server:
-
-### Option A — Node (recommended)
-```bash
-npx serve .
-# Open http://localhost:3000 in Chrome/Edge
-```
-
-### Option B — Python
-```bash
-python3 -m http.server 8080
-# Open http://localhost:8080 in Chrome/Edge
-```
-
-### Option C — VS Code
-Install the "Live Server" extension, right-click `index.html` → Open with Live Server.
-
-## Installing as a PWA
-
-1. Open in **Chrome** or **Edge** on your touchscreen laptop
-2. Look for the **install icon** (⊕) in the address bar, or go to Menu → "Install Journal"
-3. Click Install — it appears in your Start menu and taskbar
-4. Launch it like any app — it runs fullscreen with no browser chrome
-
-> **Note:** PWA install requires either HTTPS or localhost. The app works on localhost without any certificates.
+A pen-first digital journal that installs as a native-feeling app on your touchscreen laptop. Drawings sync to a self-hosted server backed by SQLite.
 
 ## Controls
 
@@ -44,19 +15,83 @@ Install the "Live Server" extension, right-click `index.html` → Open with Live
 | `E` | Switch to Eraser |
 | `H` | Switch to Highlighter |
 
-## Storage
+## Running locally
 
-All drawings are saved automatically to **IndexedDB** in your browser — no server needed, fully local. Export individual pages as PNG using the download button.
+```bash
+npm install
+node server.js
+# Open http://localhost:3000
+```
 
-## File Structure
+Create an account:
+```bash
+node create-user.js
+```
+
+## Deploying with nginx + Let's Encrypt
+
+These steps assume Arch Linux, a domain already pointed at the server, and the repo cloned to `/home/rory/Projects/journal-pwa`.
+
+### 1. Install dependencies
+
+```bash
+sudo pacman -S nginx certbot certbot-nginx nodejs npm
+npm install --omit=dev
+```
+
+### 2. Create an account
+
+```bash
+node create-user.js
+```
+
+### 3. Install the systemd service
+
+```bash
+sudo cp deploy/journal-pwa.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now journal-pwa
+sudo systemctl status journal-pwa   # should show "active (running)"
+```
+
+### 4. Install the nginx config
+
+```bash
+sudo ln -s /home/rory/Projects/journal-pwa/deploy/journal.ksionda.me /etc/nginx/conf.d/journal.ksionda.me.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 5. Get a TLS certificate
+
+```bash
+sudo certbot --nginx -d journal.ksionda.me
+```
+
+Certbot verifies domain ownership over HTTP, issues the cert, patches the nginx config, and installs an auto-renewal timer.
+
+The app is now live at `https://journal.ksionda.me`.
+
+### Updating
+
+```bash
+git pull
+sudo systemctl restart journal-pwa
+```
+
+## File structure
 
 ```
 journal-pwa/
-├── index.html      # The entire app (single file)
-├── manifest.json   # PWA metadata (name, icons, display mode)
-├── sw.js           # Service worker (offline caching)
-└── icons/
-    ├── icon-192.png
-    └── icon-512.png
+├── server.js        # Express server (auth, API, static files)
+├── app.js           # Client-side canvas + sync logic
+├── index.html       # Main app shell
+├── login.html       # Login page
+├── style.css
+├── manifest.json    # PWA metadata
+├── sw.js            # Service worker
+├── journal.db       # SQLite database (created on first run)
+├── create-user.js   # CLI to add users
+└── deploy/
+    ├── journal-pwa.service          # systemd unit
+    └── journal.ksionda.me.nginx     # nginx server block
 ```
-# journal-pwa
