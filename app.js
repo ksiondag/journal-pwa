@@ -930,6 +930,11 @@
   }
 
   // ── Journals screen ──────────────────────────────────────
+  const CACHED_JOURNALS_KEY = 'cached_journals';
+  function getCachedJournals() {
+    try { return JSON.parse(localStorage.getItem(CACHED_JOURNALS_KEY) || '[]'); } catch { return []; }
+  }
+  function setCachedJournals(j) { localStorage.setItem(CACHED_JOURNALS_KEY, JSON.stringify(j)); }
 
   async function showJournalsScreen() {
     if (thumbPanelOpen) {
@@ -981,18 +986,24 @@
         saveGuestJournals(journals);
       }
     } else {
+      let usedCache = false;
       try {
         const res = await fetch('/api/journals');
         if (res.status === 401) { window.location.href = '/login'; return; }
         if (!res.ok) throw new Error();
         journals = await res.json();
       } catch {
-        grid.innerHTML = '<div class="journals-error">Could not load journals.</div>';
-        return;
+        journals = getCachedJournals();
+        usedCache = true;
+        if (!journals.length) {
+          grid.innerHTML = '<div class="journals-error">Could not load journals.</div>';
+          return;
+        }
+        toast('Offline — showing saved journals');
       }
 
-      // Auto-create a default journal for first-time users
-      if (!journals.length) {
+      // Auto-create a default journal for first-time users (online only)
+      if (!journals.length && !usedCache) {
         try {
           const res = await fetch('/api/journals', {
             method: 'POST',
@@ -1005,6 +1016,8 @@
           }
         } catch { /* show empty state */ }
       }
+
+      setCachedJournals(journals);
     }
 
     grid.innerHTML = '';
