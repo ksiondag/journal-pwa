@@ -26,6 +26,23 @@
 
   const GUEST_MODE = localStorage.getItem('guestMode') === 'true';
 
+  const DEVICE_ID = (() => {
+    let id = localStorage.getItem('device_id');
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem('device_id', id); }
+    return id;
+  })();
+
+  // SHA-256 over the decoded PNG bytes (not the data-URL string), so client and
+  // server — which hashes the same decoded Buffer — always agree.
+  async function hashDataURL(dataURL) {
+    const b64 = dataURL.slice(dataURL.indexOf(',') + 1);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   // View transform (zoom + rotation applied on top of auto-fit)
   let viewScale = 1;
   let viewRotation = 0;
@@ -109,7 +126,7 @@
     });
   }
 
-  function dbPut(id, data, updatedAt = null) {
+  function dbPut(id, data, updatedAt = null, hash = null, deviceId = null) {
     return new Promise((resolve) => {
       const tx = db.transaction(STORE, 'readwrite');
       const store = tx.objectStore(STORE);
@@ -121,6 +138,8 @@
           data,
           created_at: getReq.result ? getReq.result.created_at : now,
           updated_at: now,
+          hash,
+          device_id: deviceId,
         });
       };
       tx.oncomplete = resolve;
@@ -288,7 +307,8 @@
     if (hasContent) {
       const url = targetCanvas.toDataURL('image/png');
       pages[idx] = url;
-      await dbPut(idx, url);
+      const hash = await hashDataURL(url);
+      await dbPut(idx, url, null, hash, DEVICE_ID);
       serverSave(idx, url);
     } else {
       delete pages[idx];
@@ -749,7 +769,8 @@
     for (const [key, data] of Object.entries(backup.pages)) {
       const id = parseInt(key, 10);
       if (!isNaN(id) && typeof data === 'string' && data.startsWith('data:')) {
-        await dbPut(id, data);
+        const hash = await hashDataURL(data);
+        await dbPut(id, data, null, hash, DEVICE_ID);
         serverSave(id, data);
         count++;
       }
@@ -861,7 +882,7 @@
       const res = await fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: dataURL }),
+        body: JSON.stringify({ data: dataURL, device_id: DEVICE_ID }),
       });
       if (res.ok) setServerStatus(true);
     } catch (_) {
@@ -874,59 +895,175 @@
     fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, { method: 'DELETE' }).catch(() => {});
   }
 
-  async function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
   async function syncFromServer() {
     if (!currentJournalId || GUEST_MODE) return;
 
-    let serverPages;
+    const localKeys = await dbGetAllKeys();
+    const localMeta = {};
+    for (const key of localKeys) {
+      const rec = await dbGetRecord(key);
+      if (!rec) continue;
+      // Records saved before hashing existed have no cached hash — backfill it once
+      // so an old, unchanged page doesn't look like a conflict on its first sync.
+      let hash = rec.hash;
+      if (!hash) {
+        hash = await hashDataURL(rec.data);
+        await dbPut(key, rec.data, rec.updated_at, hash, rec.device_id || DEVICE_ID);
+      }
+      localMeta[key] = { hash, updated_at: rec.updated_at, device_id: rec.device_id };
+    }
+
+    let result;
     try {
-      const res = await fetch(`/api/journals/${currentJournalId}/pages`);
+      const res = await fetch(`/api/journals/${currentJournalId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pages: localMeta }),
+      });
       if (res.status === 401) { window.location.href = '/login'; return; }
       if (!res.ok) throw new Error();
-      serverPages = await res.json();
+      result = await res.json();
       setServerStatus(true);
     } catch (_) {
       setServerStatus(false);
       return;
     }
 
-    const localKeys = new Set(await dbGetAllKeys());
-    const serverPageNumbers = new Set(serverPages.map(p => p.page_number));
-
-    for (const { page_number, updated_at: serverUpdatedAt } of serverPages) {
-      const localRecord = localKeys.has(page_number) ? await dbGetRecord(page_number) : null;
-      const localUpdatedAt = localRecord && localRecord.updated_at;
-      const serverNewer = !localUpdatedAt || new Date(serverUpdatedAt) > new Date(localUpdatedAt);
-
-      if (serverNewer) {
-        try {
-          const res = await fetch(`/api/journals/${currentJournalId}/pages/${page_number}`);
-          if (!res.ok) continue;
-          const dataURL = await blobToDataURL(await res.blob());
-          await dbPut(page_number, dataURL, serverUpdatedAt);
-          pages[page_number] = dataURL;
-        } catch (_) {}
-      } else {
-        // Local is newer — push to server
-        if (localRecord && localRecord.data) serverSave(page_number, localRecord.data);
-      }
+    for (const [numStr, entry] of Object.entries(result.download)) {
+      const n = parseInt(numStr, 10);
+      const hash = await hashDataURL(entry.data);
+      await dbPut(n, entry.data, entry.updated_at, hash, entry.device_id);
+      pages[n] = entry.data;
     }
 
-    // Push local pages that aren't on the server yet (made while offline)
-    for (const pageNumber of localKeys) {
-      if (!serverPageNumbers.has(pageNumber)) {
-        const dataURL = pages[pageNumber] || await dbGet(pageNumber);
-        if (dataURL) serverSave(pageNumber, dataURL);
-      }
+    for (const n of result.upload) {
+      const dataURL = pages[n] || await dbGet(n);
+      if (dataURL) serverSave(n, dataURL);
     }
+
+    const conflictEntries = Object.entries(result.conflicts || {});
+    if (conflictEntries.length) await resolveConflicts(conflictEntries);
+  }
+
+  // ── Conflict resolution ───────────────────────────────────
+  function formatConflictTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
+    return isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  async function drawConflictCanvas(canvas, dataURL) {
+    canvas.width = SAVE_W;
+    canvas.height = SAVE_H;
+    const cctx = canvas.getContext('2d');
+    cctx.clearRect(0, 0, SAVE_W, SAVE_H);
+    if (!dataURL) return;
+    await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => { cctx.drawImage(img, 0, 0, SAVE_W, SAVE_H); resolve(); };
+      img.onerror = resolve;
+      img.src = dataURL;
+    });
+  }
+
+  // conflictEntries: [[pageNumberStr, serverEntry], ...] from the /sync response.
+  // Blocks (returns a Promise) until every conflict has been resolved by the user.
+  function resolveConflicts(conflictEntries) {
+    return new Promise(async resolve => {
+      const items = [];
+      for (const [numStr, serverEntry] of [...conflictEntries].sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))) {
+        const n = parseInt(numStr, 10);
+        items.push({ n, server: serverEntry, local: await dbGetRecord(n), resolved: false });
+      }
+
+      let idx = 0;
+      document.body.dataset.view = 'conflicts';
+
+      const canvasMine = document.getElementById('conflict-canvas-mine');
+      const canvasServer = document.getElementById('conflict-canvas-server');
+      const counterEl = document.getElementById('conflicts-counter');
+      const pageLabelEl = document.getElementById('conflicts-page-label');
+      const mineTimeEl = document.getElementById('conflict-mine-time');
+      const serverTimeEl = document.getElementById('conflict-server-time');
+      const prevBtn = document.getElementById('conflicts-prev');
+      const nextBtn = document.getElementById('conflicts-next');
+      const pickMineBtn = document.getElementById('conflict-pick-mine');
+      const pickServerBtn = document.getElementById('conflict-pick-server');
+      const keepAllMineBtn = document.getElementById('conflicts-keep-all-mine');
+      const keepAllServerBtn = document.getElementById('conflicts-keep-all-server');
+
+      async function render() {
+        const item = items[idx];
+        counterEl.textContent = `${idx + 1} of ${items.length}`;
+        pageLabelEl.textContent = `Page ${item.n + 1}`;
+        prevBtn.disabled = idx === 0;
+        nextBtn.disabled = idx === items.length - 1;
+        mineTimeEl.textContent = formatConflictTime(item.local && item.local.updated_at);
+        serverTimeEl.textContent = formatConflictTime(item.server.updated_at);
+        await Promise.all([
+          drawConflictCanvas(canvasMine, item.local && item.local.data),
+          drawConflictCanvas(canvasServer, item.server.data),
+        ]);
+      }
+
+      async function applyResolution(item, which) {
+        item.resolved = which;
+        if (which === 'server') {
+          const hash = await hashDataURL(item.server.data);
+          await dbPut(item.n, item.server.data, item.server.updated_at, hash, item.server.device_id);
+          pages[item.n] = item.server.data;
+        } else if (item.local && item.local.data) {
+          serverSave(item.n, item.local.data);
+        }
+      }
+
+      function nextUnresolvedIndex(from) {
+        for (let i = from; i < items.length; i++) if (!items[i].resolved) return i;
+        for (let i = 0; i < from; i++) if (!items[i].resolved) return i;
+        return -1;
+      }
+
+      function cleanup() {
+        prevBtn.removeEventListener('click', onPrev);
+        nextBtn.removeEventListener('click', onNext);
+        pickMineBtn.removeEventListener('click', onPickMine);
+        pickServerBtn.removeEventListener('click', onPickServer);
+        keepAllMineBtn.removeEventListener('click', onKeepAllMine);
+        keepAllServerBtn.removeEventListener('click', onKeepAllServer);
+        document.body.dataset.view = 'editor';
+      }
+
+      async function pick(which) {
+        await applyResolution(items[idx], which);
+        const next = nextUnresolvedIndex(idx + 1);
+        if (next === -1) { cleanup(); resolve(); return; }
+        idx = next;
+        await render();
+      }
+
+      function onPrev() { if (idx > 0) { idx--; render(); } }
+      function onNext() { if (idx < items.length - 1) { idx++; render(); } }
+      function onPickMine() { pick('mine'); }
+      function onPickServer() { pick('server'); }
+
+      async function onKeepAllMine() {
+        for (const item of items) if (!item.resolved) await applyResolution(item, 'mine');
+        cleanup(); resolve();
+      }
+      async function onKeepAllServer() {
+        for (const item of items) if (!item.resolved) await applyResolution(item, 'server');
+        cleanup(); resolve();
+      }
+
+      prevBtn.addEventListener('click', onPrev);
+      nextBtn.addEventListener('click', onNext);
+      pickMineBtn.addEventListener('click', onPickMine);
+      pickServerBtn.addEventListener('click', onPickServer);
+      keepAllMineBtn.addEventListener('click', onKeepAllMine);
+      keepAllServerBtn.addEventListener('click', onKeepAllServer);
+
+      await render();
+    });
   }
 
   // ── Journals screen ──────────────────────────────────────

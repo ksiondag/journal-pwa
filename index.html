@@ -141,6 +141,52 @@
   <div id="journals-grid"></div>
 </div>
 
+<!-- Conflict resolution screen -->
+<div id="conflicts-screen">
+  <div id="conflicts-topbar">
+    <span id="conflicts-title">Resolve Conflicts</span>
+    <span id="conflicts-counter"></span>
+  </div>
+  <div id="conflicts-wrap">
+    <div id="conflicts-book">
+      <div class="conflict-side" id="conflict-mine">
+        <div class="conflict-canvas-wrap">
+          <canvas id="conflict-canvas-mine"></canvas>
+        </div>
+        <div class="conflict-label">
+          <span>Your version</span>
+          <span class="conflict-time" id="conflict-mine-time"></span>
+        </div>
+        <button class="conflict-pick-btn" id="conflict-pick-mine">Keep this</button>
+      </div>
+      <div id="conflicts-spine"></div>
+      <div class="conflict-side" id="conflict-server">
+        <div class="conflict-canvas-wrap">
+          <canvas id="conflict-canvas-server"></canvas>
+        </div>
+        <div class="conflict-label">
+          <span>Server version</span>
+          <span class="conflict-time" id="conflict-server-time"></span>
+        </div>
+        <button class="conflict-pick-btn" id="conflict-pick-server">Keep this</button>
+      </div>
+    </div>
+  </div>
+  <div id="conflicts-nav">
+    <button class="tool-btn" id="conflicts-prev" title="Previous conflict">
+      <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <span id="conflicts-page-label"></span>
+    <button class="tool-btn" id="conflicts-next" title="Next conflict">
+      <svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+  </div>
+  <div id="conflicts-bulk">
+    <button id="conflicts-keep-all-mine">Keep all mine</button>
+    <button id="conflicts-keep-all-server">Keep all server's</button>
+  </div>
+</div>
+
 <!-- Thumbnail panel -->
 <div id="thumb-panel">
   <button id="thumb-close" title="Close">✕</button>

@@ -58,6 +58,12 @@ if (!userCols.includes('password_hash')) {
   db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
 }
 
+// Migration: add device_id column to existing databases (attribution for sync conflicts)
+const pageCols = db.prepare('PRAGMA table_info(pages)').all().map(c => c.name);
+if (!pageCols.includes('device_id')) {
+  db.exec('ALTER TABLE pages ADD COLUMN device_id TEXT');
+}
+
 // ── Session store (SQLite-backed) ──────────────────────────────────────────
 
 class SQLiteStore extends session.Store {
@@ -210,11 +216,47 @@ app.post('/api/journals', requireAuth, (req, res) => {
 
 // ── Pages ──────────────────────────────────────────────────────────────────
 
-app.get('/api/journals/:journalId/pages', requireAuth, (req, res) => {
+function hashBuffer(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+app.post('/api/journals/:journalId/sync', requireAuth, (req, res) => {
   if (!ownJournal(req, res)) return;
-  res.json(db.prepare(
-    'SELECT id, page_number, updated_at FROM pages WHERE journal_id = ? ORDER BY page_number'
-  ).all(req.params.journalId));
+  const clientPages = req.body.pages && typeof req.body.pages === 'object' ? req.body.pages : {};
+
+  const serverRows = db.prepare(
+    'SELECT page_number, data, updated_at, device_id FROM pages WHERE journal_id = ?'
+  ).all(req.params.journalId);
+  const serverNumbers = new Set(serverRows.map(r => r.page_number));
+
+  const download = {};
+  const upload = [];
+  const conflicts = {};
+
+  for (const row of serverRows) {
+    const client = clientPages[row.page_number];
+    if (!client) {
+      download[row.page_number] = {
+        data: `data:image/png;base64,${row.data.toString('base64')}`,
+        updated_at: row.updated_at,
+        device_id: row.device_id,
+      };
+      continue;
+    }
+    if (client.hash === hashBuffer(row.data)) continue; // identical content — already synced
+    conflicts[row.page_number] = {
+      data: `data:image/png;base64,${row.data.toString('base64')}`,
+      updated_at: row.updated_at,
+      device_id: row.device_id,
+    };
+  }
+
+  for (const key of Object.keys(clientPages)) {
+    const n = parseInt(key, 10);
+    if (!serverNumbers.has(n)) upload.push(n);
+  }
+
+  res.json({ download, upload, conflicts });
 });
 
 app.get('/api/journals/:journalId/pages/:pageNumber', requireAuth, (req, res) => {
@@ -234,26 +276,27 @@ app.put('/api/journals/:journalId/pages/:pageNumber', requireAuth, (req, res) =>
   if (isNaN(n) || n < 0) return res.status(400).end();
 
   const PREFIX = 'data:image/png;base64,';
-  const { data } = req.body;
+  const { data, device_id } = req.body;
   if (typeof data !== 'string' || !data.startsWith(PREFIX)) {
     return res.status(400).json({ error: 'expected data:image/png;base64, string' });
   }
 
   const buf = Buffer.from(data.slice(PREFIX.length), 'base64');
   const { journalId } = req.params;
+  const deviceId = typeof device_id === 'string' ? device_id : null;
 
   const existing = db.prepare(
     'SELECT id FROM pages WHERE journal_id = ? AND page_number = ?'
   ).get(journalId, n);
 
   if (existing) {
-    db.prepare("UPDATE pages SET data = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(buf, existing.id);
+    db.prepare("UPDATE pages SET data = ?, device_id = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(buf, deviceId, existing.id);
     res.json({ id: existing.id, page_number: n });
   } else {
     const id = crypto.randomUUID();
-    db.prepare('INSERT INTO pages (id, journal_id, page_number, data) VALUES (?, ?, ?, ?)')
-      .run(id, journalId, n, buf);
+    db.prepare('INSERT INTO pages (id, journal_id, page_number, data, device_id) VALUES (?, ?, ?, ?, ?)')
+      .run(id, journalId, n, buf, deviceId);
     res.status(201).json({ id, page_number: n });
   }
 });
