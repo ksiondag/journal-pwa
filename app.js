@@ -603,6 +603,7 @@
   // regardless of which element the pencil happens to land on.
   document.addEventListener('wheel', e => {
     if (document.body.dataset.view !== 'editor') return;
+    if (thumbPanel.contains(e.target)) return;
     e.preventDefault();
     if (e.ctrlKey) {
       // Pinch-to-zoom / pencil double-tap: apply to journal view
