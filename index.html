@@ -115,6 +115,22 @@
   </div>
 
   <div id="journal-wrap">
+    <div id="bookmark-controls">
+      <button class="tool-btn" id="bm-add" title="Bookmark this page">
+        <svg viewBox="0 0 24 24"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M9 10h6M12 7v6"/></svg>
+      </button>
+      <button class="tool-btn" id="bm-remove" title="Remove bookmark">
+        <svg viewBox="0 0 24 24"><path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M9.5 8l5 5M14.5 8l-5 5"/></svg>
+      </button>
+      <div id="bm-palette">
+        <button class="bm-swatch" data-color="#6b5545" title="Spine brown"></button>
+        <button class="bm-swatch" data-color="#c0392b" title="Red"></button>
+        <button class="bm-swatch" data-color="#2980b9" title="Blue"></button>
+        <button class="bm-swatch" data-color="#27ae60" title="Green"></button>
+        <button class="bm-swatch" data-color="#f39c12" title="Orange"></button>
+        <button class="bm-swatch" data-color="#8e44ad" title="Purple"></button>
+      </div>
+    </div>
     <div id="journal-book">
       <div id="page-left">
         <svg id="page-lines-left" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -193,6 +209,11 @@
   <div id="thumb-list"></div>
 </div>
 
+<!-- Bookmark list panel (controls live in #journal-wrap so they're always visible) -->
+<div id="bookmark-panel">
+  <div id="bookmark-list"></div>
+</div>
+
 <div id="toast"></div>
 <div id="cursor-ring"></div>
 
@@ -202,6 +223,17 @@
     <div id="confirm-buttons">
       <button id="confirm-cancel">Cancel</button>
       <button id="confirm-ok" class="danger">OK</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bookmark sync conflict dialog -->
+<div id="bookmark-conflict-overlay" hidden>
+  <div id="bookmark-conflict-dialog">
+    <p id="bookmark-conflict-message">Bookmarks differ between this device and the server.</p>
+    <div id="bookmark-conflict-buttons">
+      <button id="bookmark-conflict-mine">Keep mine</button>
+      <button id="bookmark-conflict-server" class="danger">Keep server's</button>
     </div>
   </div>
 </div>

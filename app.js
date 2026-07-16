@@ -8,8 +8,9 @@
   );
 
   // ── State ───────────────────────────────────────────────
-  const DB_VER = 1;
+  const DB_VER = 2;
   const STORE = 'pages';
+  const BOOKMARK_STORE = 'bookmarks';
   const PAGE_W = 560;   // reference page width; dot spacing scales proportionally with this
   const SAVE_W = 1754;  // fixed save resolution (A5 @ 150 DPI)
   const SAVE_H = 2480;
@@ -17,6 +18,7 @@
   let db = null;
   let currentPage = 0;   // in spread mode, always even-indexed (right-side page)
   let pages = {};
+  let bookmarks = {};    // pageIndex → color hex
   let tool = 'pen';
   let penColor = '#1a1a1a';
   let penSize = 2;
@@ -64,6 +66,12 @@
   const turnOverlay = document.getElementById('turn-overlay');
   const thumbPanel = document.getElementById('thumb-panel');
   const thumbList = document.getElementById('thumb-list');
+  const bookmarkPanel = document.getElementById('bookmark-panel');
+  const bookmarkList = document.getElementById('bookmark-list');
+  const bookmarkControls = document.getElementById('bookmark-controls');
+  const bmAddBtn = document.getElementById('bm-add');
+  const bmRemoveBtn = document.getElementById('bm-remove');
+  const bmSwatches = document.querySelectorAll('.bm-swatch');
   const pageContainer = document.getElementById('page-container');
   const journalBook = document.getElementById('journal-book');
   const journalWrap = document.getElementById('journal-wrap');
@@ -82,7 +90,11 @@
   function readGuestThumb(journalId) {
     return new Promise(resolve => {
       const req = indexedDB.open(`journal_db_${journalId}`, DB_VER);
-      req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: 'id' });
+      req.onupgradeneeded = e => {
+        const idb = e.target.result;
+        if (!idb.objectStoreNames.contains(STORE)) idb.createObjectStore(STORE, { keyPath: 'id' });
+        if (!idb.objectStoreNames.contains(BOOKMARK_STORE)) idb.createObjectStore(BOOKMARK_STORE, { keyPath: 'id' });
+      };
       req.onsuccess = e => {
         const d = e.target.result;
         const tx = d.transaction(STORE, 'readonly');
@@ -103,7 +115,11 @@
   function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(journalDbName(), DB_VER);
-      req.onupgradeneeded = e => e.target.result.createObjectStore(STORE, { keyPath: 'id' });
+      req.onupgradeneeded = e => {
+        const idb = e.target.result;
+        if (!idb.objectStoreNames.contains(STORE)) idb.createObjectStore(STORE, { keyPath: 'id' });
+        if (!idb.objectStoreNames.contains(BOOKMARK_STORE)) idb.createObjectStore(BOOKMARK_STORE, { keyPath: 'id' });
+      };
       req.onsuccess = e => resolve(e.target.result);
       req.onerror = () => reject(req.error);
     });
@@ -163,6 +179,38 @@
       const req = tx.objectStore(STORE).getAllKeys();
       req.onsuccess = () => resolve(req.result || []);
       req.onerror = () => resolve([]);
+    });
+  }
+
+  // ── IndexedDB (bookmarks) ───────────────────────────────
+  function bmGetAll() {
+    return new Promise((resolve) => {
+      const tx = db.transaction(BOOKMARK_STORE, 'readonly');
+      const req = tx.objectStore(BOOKMARK_STORE).getAll();
+      req.onsuccess = () => {
+        const out = {};
+        for (const rec of req.result || []) out[rec.id] = { color: rec.color, updated_at: rec.updated_at };
+        resolve(out);
+      };
+      req.onerror = () => resolve({});
+    });
+  }
+
+  function bmPut(id, color, updatedAt = null) {
+    return new Promise((resolve) => {
+      const tx = db.transaction(BOOKMARK_STORE, 'readwrite');
+      tx.objectStore(BOOKMARK_STORE).put({ id, color, updated_at: updatedAt || new Date().toISOString() });
+      tx.oncomplete = resolve;
+      tx.onerror = resolve;
+    });
+  }
+
+  function bmDelete(id) {
+    return new Promise((resolve) => {
+      const tx = db.transaction(BOOKMARK_STORE, 'readwrite');
+      tx.objectStore(BOOKMARK_STORE).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = resolve;
     });
   }
 
@@ -291,6 +339,7 @@
       await loadCanvasContent(ctx, canvas, pageContainer, idx);
       pageLabel.textContent = `Page ${idx + 1}`;
     }
+    refreshBookmarkControls();
   }
 
   function schedulePageSave(idx, targetCanvas, targetCtx) {
@@ -719,11 +768,13 @@
   document.getElementById('btn-backup').addEventListener('click', async () => {
     await saveCurrentPages();
     const keys = await dbGetAllKeys();
-    const backup = { version: 1, pages: {} };
+    const backup = { version: 2, pages: {}, bookmarks: {} };
     for (const key of keys) {
       const data = await dbGet(key);
       if (data) backup.pages[key] = data;
     }
+    const localBookmarks = await bmGetAll();
+    for (const [id, rec] of Object.entries(localBookmarks)) backup.bookmarks[id] = rec;
     const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -779,6 +830,22 @@
       }
     }
 
+    const existingBookmarkKeys = Object.keys(await bmGetAll());
+    for (const key of existingBookmarkKeys) {
+      await bmDelete(parseInt(key, 10));
+      serverDeleteBookmark(key);
+    }
+    bookmarks = {};
+
+    if (backup.bookmarks && typeof backup.bookmarks === 'object') {
+      for (const [key, rec] of Object.entries(backup.bookmarks)) {
+        const id = parseInt(key, 10);
+        if (!isNaN(id) && rec && typeof rec.color === 'string') {
+          await addBookmark(id, rec.color);
+        }
+      }
+    }
+
     currentPage = 0;
     await loadPage(currentPage);
     toast(`Restored ${count} page${count !== 1 ? 's' : ''}`);
@@ -817,12 +884,21 @@
   document.getElementById('btn-thumbs').addEventListener('click', async () => {
     thumbPanelOpen = !thumbPanelOpen;
     thumbPanel.classList.toggle('open', thumbPanelOpen);
-    if (thumbPanelOpen) await renderThumbs();
-    else stopThumbLoading();
+    bookmarkPanel.classList.toggle('open', thumbPanelOpen);
+    bookmarkControls.classList.toggle('open', thumbPanelOpen);
+    if (thumbPanelOpen) {
+      await renderThumbs();
+      renderBookmarks();
+      refreshBookmarkControls();
+    } else {
+      stopThumbLoading();
+    }
   });
   document.getElementById('thumb-close').addEventListener('click', () => {
     thumbPanelOpen = false;
     thumbPanel.classList.remove('open');
+    bookmarkPanel.classList.remove('open');
+    bookmarkControls.classList.remove('open');
     stopThumbLoading();
   });
 
@@ -885,8 +961,7 @@
         currentPage = idx;
         if (spreadMode && currentPage % 2 === 1) currentPage++;
         await loadPage(currentPage);
-        thumbPanelOpen = false;
-        thumbPanel.classList.remove('open');
+        closeAllPagesPanels();
       });
       thumbList.appendChild(item);
 
@@ -896,6 +971,95 @@
 
     if (activeItem) activeItem.scrollIntoView({ block: 'center' });
   }
+
+  function closeAllPagesPanels() {
+    thumbPanelOpen = false;
+    thumbPanel.classList.remove('open');
+    bookmarkPanel.classList.remove('open');
+    bookmarkControls.classList.remove('open');
+    stopThumbLoading();
+  }
+
+  // ── Bookmarks ─────────────────────────────────────────────
+  bmSwatches.forEach(sw => sw.style.setProperty('--swatch-color', sw.dataset.color));
+
+  async function addBookmark(idx, color) {
+    const now = new Date().toISOString();
+    bookmarks[idx] = color;
+    await bmPut(idx, color, now);
+    serverSaveBookmark(idx, color);
+    renderBookmarks();
+    refreshBookmarkControls();
+  }
+
+  async function removeBookmark(idx) {
+    delete bookmarks[idx];
+    await bmDelete(idx);
+    serverDeleteBookmark(idx);
+    renderBookmarks();
+    refreshBookmarkControls();
+  }
+
+  function refreshBookmarkControls() {
+    const color = bookmarks[currentPage];
+    bmAddBtn.disabled = !!color;
+    bmRemoveBtn.disabled = !color;
+    bmSwatches.forEach(sw => {
+      sw.disabled = !color;
+      sw.classList.toggle('active', !!color && sw.dataset.color === color);
+    });
+  }
+
+  function renderBookmarks() {
+    bookmarkList.innerHTML = '';
+    const sorted = Object.keys(bookmarks).map(Number).sort((a, b) => a - b);
+
+    if (!sorted.length) {
+      const empty = document.createElement('div');
+      empty.className = 'bookmark-empty';
+      empty.textContent = 'No bookmarks yet';
+      bookmarkList.appendChild(empty);
+      return;
+    }
+
+    for (const idx of sorted) {
+      const item = document.createElement('div');
+      item.className = 'thumb-item bookmark-item' + (idx === currentPage ? ' active-thumb' : '');
+      item.style.borderColor = bookmarks[idx];
+
+      const tc = document.createElement('canvas');
+      tc.width = 100; tc.height = 70;
+      const tctx = tc.getContext('2d');
+      tctx.fillStyle = '#FAF7F0';
+      tctx.fillRect(0, 0, 100, 70);
+      loadThumb(idx, tctx);
+
+      const numEl = document.createElement('span');
+      numEl.className = 'thumb-num';
+      numEl.textContent = idx + 1;
+
+      item.appendChild(tc);
+      item.appendChild(numEl);
+      item.addEventListener('click', async () => {
+        stopThumbLoading();
+        await saveCurrentPages();
+        currentPage = idx;
+        if (spreadMode && currentPage % 2 === 1) currentPage++;
+        await loadPage(currentPage);
+        closeAllPagesPanels();
+      });
+      bookmarkList.appendChild(item);
+    }
+  }
+
+  bmAddBtn.addEventListener('click', () => addBookmark(currentPage, bmSwatches[0].dataset.color));
+  bmRemoveBtn.addEventListener('click', () => removeBookmark(currentPage));
+  bmSwatches.forEach(sw => {
+    sw.addEventListener('click', () => {
+      if (!bookmarks[currentPage]) return;
+      addBookmark(currentPage, sw.dataset.color);
+    });
+  });
 
   // ── Server sync ──────────────────────────────────────────
   const serverDot = document.getElementById('server-dot');
@@ -922,6 +1086,94 @@
   function serverDeletePage(pageNumber) {
     if (!currentJournalId || GUEST_MODE) return;
     fetch(`/api/journals/${currentJournalId}/pages/${pageNumber}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  async function serverSaveBookmark(pageNumber, color) {
+    if (!currentJournalId || GUEST_MODE) return;
+    try {
+      const res = await fetch(`/api/journals/${currentJournalId}/bookmarks/${pageNumber}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color }),
+      });
+      if (res.ok) setServerStatus(true);
+    } catch (_) {
+      setServerStatus(false);
+    }
+  }
+
+  function serverDeleteBookmark(pageNumber) {
+    if (!currentJournalId || GUEST_MODE) return;
+    fetch(`/api/journals/${currentJournalId}/bookmarks/${pageNumber}`, { method: 'DELETE' }).catch(() => {});
+  }
+
+  // Bookmarks are tiny {page, color} records, so unlike page sync (per-page hash/conflict
+  // handling) this compares the whole local and server sets in one shot and — if they differ
+  // at all — asks the user once whether to keep this device's set or the server's.
+  async function bookmarksSyncFromServer() {
+    if (!currentJournalId || GUEST_MODE) return;
+
+    let serverList;
+    try {
+      const res = await fetch(`/api/journals/${currentJournalId}/bookmarks`);
+      if (!res.ok) throw new Error();
+      serverList = await res.json();
+      setServerStatus(true);
+    } catch (_) {
+      setServerStatus(false);
+      return;
+    }
+
+    const localAll = await bmGetAll();
+    const localMap = {};
+    for (const [id, rec] of Object.entries(localAll)) localMap[id] = rec.color;
+    const serverMap = {};
+    for (const row of serverList) serverMap[row.page_number] = row.color;
+
+    const localKeys = Object.keys(localMap).sort();
+    const serverKeys = Object.keys(serverMap).sort();
+    const identical = localKeys.length === serverKeys.length &&
+      localKeys.every(k => localMap[k] === serverMap[k]);
+
+    if (identical) {
+      bookmarks = {};
+      for (const k of localKeys) bookmarks[k] = localMap[k];
+      return;
+    }
+
+    const choice = await showBookmarkConflict();
+    if (choice === 'server') {
+      for (const k of localKeys) await bmDelete(parseInt(k, 10));
+      bookmarks = {};
+      for (const row of serverList) {
+        bookmarks[row.page_number] = row.color;
+        await bmPut(row.page_number, row.color, row.updated_at);
+      }
+    } else {
+      for (const k of serverKeys) if (!(k in localMap)) serverDeleteBookmark(k);
+      for (const k of localKeys) serverSaveBookmark(k, localMap[k]);
+      bookmarks = {};
+      for (const k of localKeys) bookmarks[k] = localMap[k];
+    }
+  }
+
+  function showBookmarkConflict() {
+    return new Promise(resolve => {
+      const overlay = document.getElementById('bookmark-conflict-overlay');
+      overlay.hidden = false;
+      const mineBtn = document.getElementById('bookmark-conflict-mine');
+      const serverBtn = document.getElementById('bookmark-conflict-server');
+      function finish(which) {
+        overlay.hidden = true;
+        mineBtn.removeEventListener('click', onMine);
+        serverBtn.removeEventListener('click', onServer);
+        resolve(which);
+      }
+      function onMine() { finish('mine'); }
+      function onServer() { finish('server'); }
+      mineBtn.addEventListener('click', onMine);
+      serverBtn.addEventListener('click', onServer);
+    });
   }
 
   async function syncFromServer() {
@@ -1103,10 +1355,7 @@
   function setCachedJournals(j) { localStorage.setItem(CACHED_JOURNALS_KEY, JSON.stringify(j)); }
 
   async function showJournalsScreen() {
-    if (thumbPanelOpen) {
-      thumbPanelOpen = false;
-      thumbPanel.classList.remove('open');
-    }
+    if (thumbPanelOpen) closeAllPagesPanels();
     if (db) await saveCurrentPages();
     document.body.dataset.view = 'journals';
     await renderJournals();
@@ -1116,6 +1365,7 @@
     currentJournalId = id;
     currentJournalName = name;
     pages = {};
+    bookmarks = {};
     currentPage = 0;
 
     if (spreadMode) {
@@ -1136,6 +1386,9 @@
 
     setCanvasSize();
     await syncFromServer();
+    const localBookmarks = await bmGetAll();
+    for (const [id, rec] of Object.entries(localBookmarks)) bookmarks[id] = rec.color;
+    await bookmarksSyncFromServer();
     await loadPage(0);
   }
 

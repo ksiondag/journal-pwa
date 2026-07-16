@@ -74,6 +74,16 @@ db.exec(`
     UNIQUE(journal_id, page_number)
   );
 
+  CREATE TABLE IF NOT EXISTS bookmarks (
+    id          TEXT PRIMARY KEY,
+    journal_id  TEXT NOT NULL REFERENCES journals(id) ON DELETE CASCADE,
+    page_number INTEGER NOT NULL,
+    color       TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(journal_id, page_number)
+  );
+
   CREATE TABLE IF NOT EXISTS sessions (
     sid     TEXT PRIMARY KEY,
     data    TEXT NOT NULL,
@@ -335,6 +345,51 @@ app.delete('/api/journals/:journalId/pages/:pageNumber', requireAuth, (req, res)
   const n = parseInt(req.params.pageNumber, 10);
   if (isNaN(n) || n < 0) return res.status(400).end();
   db.prepare('DELETE FROM pages WHERE journal_id = ? AND page_number = ?')
+    .run(req.params.journalId, n);
+  res.json({ ok: true });
+});
+
+// ── Bookmarks ──────────────────────────────────────────────────────────────
+
+app.get('/api/journals/:journalId/bookmarks', requireAuth, (req, res) => {
+  if (!ownJournal(req, res)) return;
+  res.json(db.prepare(
+    'SELECT page_number, color, updated_at FROM bookmarks WHERE journal_id = ?'
+  ).all(req.params.journalId));
+});
+
+app.put('/api/journals/:journalId/bookmarks/:pageNumber', requireAuth, (req, res) => {
+  if (!ownJournal(req, res)) return;
+  const n = parseInt(req.params.pageNumber, 10);
+  if (isNaN(n) || n < 0) return res.status(400).end();
+
+  const { color } = req.body;
+  if (typeof color !== 'string' || !color) {
+    return res.status(400).json({ error: 'color required' });
+  }
+
+  const { journalId } = req.params;
+  const existing = db.prepare(
+    'SELECT id FROM bookmarks WHERE journal_id = ? AND page_number = ?'
+  ).get(journalId, n);
+
+  if (existing) {
+    db.prepare("UPDATE bookmarks SET color = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(color, existing.id);
+    res.json({ id: existing.id, page_number: n, color });
+  } else {
+    const id = crypto.randomUUID();
+    db.prepare('INSERT INTO bookmarks (id, journal_id, page_number, color) VALUES (?, ?, ?, ?)')
+      .run(id, journalId, n, color);
+    res.status(201).json({ id, page_number: n, color });
+  }
+});
+
+app.delete('/api/journals/:journalId/bookmarks/:pageNumber', requireAuth, (req, res) => {
+  if (!ownJournal(req, res)) return;
+  const n = parseInt(req.params.pageNumber, 10);
+  if (isNaN(n) || n < 0) return res.status(400).end();
+  db.prepare('DELETE FROM bookmarks WHERE journal_id = ? AND page_number = ?')
     .run(req.params.journalId, n);
   res.json({ ok: true });
 });
