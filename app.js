@@ -318,13 +318,14 @@
   }
 
   async function saveCurrentPages() {
+    const dirty = new Set(pendingSaves.keys());
     for (const timer of pendingSaves.values()) clearTimeout(timer);
     pendingSaves.clear();
     if (!db) return;
-    await saveCanvas(currentPage, canvas, ctx);
+    if (dirty.has(canvas)) await saveCanvas(currentPage, canvas, ctx);
     if (spreadMode) {
       const leftIdx = currentPage - 1;
-      if (leftIdx >= 0) await saveCanvas(leftIdx, canvasLeft, ctxLeft);
+      if (leftIdx >= 0 && dirty.has(canvasLeft)) await saveCanvas(leftIdx, canvasLeft, ctxLeft);
     }
   }
 
