@@ -7,10 +7,39 @@ const session  = require('express-session');
 const rateLimit = require('express-rate-limit');
 const crypto   = require('crypto');
 const fs       = require('fs');
+const os       = require('os');
 const path     = require('path');
+const https    = require('https');
+const { execSync } = require('child_process');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
+// Browsers only expose crypto.randomUUID()/crypto.subtle to "secure contexts"
+// (https:, or http://localhost). Accessing this server from another device's
+// browser over plain LAN http:// silently breaks those APIs client-side, so we
+// serve HTTPS with a self-signed cert instead.
+function localIPv4s() {
+  const addrs = [];
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const net of iface || []) {
+      if (net.family === 'IPv4' && !net.internal) addrs.push(net.address);
+    }
+  }
+  return addrs;
+}
+
+function ensureSelfSignedCert(keyPath, certPath) {
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) return;
+  fs.mkdirSync(path.dirname(keyPath), { recursive: true });
+  const altNames = ['DNS:localhost', 'IP:127.0.0.1', ...localIPv4s().map(ip => `IP:${ip}`)].join(',');
+  execSync(
+    `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" ` +
+    `-days 825 -nodes -subj "/CN=localhost" -addext "subjectAltName=${altNames}"`,
+    { stdio: 'ignore' }
+  );
+  console.log('Generated self-signed TLS certificate (certs/) for LAN dev HTTPS.');
+}
 
 app.set('trust proxy', 1); // nginx reverse proxy
 
@@ -325,14 +354,31 @@ app.delete('/api/journals/:journalId', requireAuth, (req, res) => {
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
+// Production runs behind nginx, which terminates TLS with a real certificate
+// and reverse-proxies plain HTTP to this process — so only dev serves its own
+// (self-signed) HTTPS directly, letting LAN devices use crypto.randomUUID()/
+// crypto.subtle, which browsers restrict to secure contexts.
 
-app.listen(PORT, () => {
-  console.log(`Journal → http://localhost:${PORT}`);
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('  Set NODE_ENV=production when running behind HTTPS');
-  }
+function logReady(url) {
   const hasAccounts = db.prepare('SELECT 1 FROM users WHERE password_hash IS NOT NULL LIMIT 1').get();
-  if (!hasAccounts) {
-    console.log(`  No accounts yet — register at http://localhost:${PORT}/login`);
-  }
-});
+  if (!hasAccounts) console.log(`  No accounts yet — register at ${url}/login`);
+}
+
+if (process.env.NODE_ENV === 'production') {
+  app.listen(PORT, () => {
+    console.log(`Journal → listening on ${PORT} (behind reverse-proxy HTTPS)`);
+    logReady(`http://localhost:${PORT}`);
+  });
+} else {
+  const KEY_PATH  = path.join(__dirname, 'certs', 'key.pem');
+  const CERT_PATH = path.join(__dirname, 'certs', 'cert.pem');
+  ensureSelfSignedCert(KEY_PATH, CERT_PATH);
+
+  https.createServer({ key: fs.readFileSync(KEY_PATH), cert: fs.readFileSync(CERT_PATH) }, app).listen(PORT, () => {
+    console.log(`Journal → https://localhost:${PORT}`);
+    for (const ip of localIPv4s()) {
+      console.log(`  LAN     → https://${ip}:${PORT}  (accept the self-signed certificate warning)`);
+    }
+    logReady(`https://localhost:${PORT}`);
+  });
+}
