@@ -23,6 +23,7 @@
   let spreadMode = false;
   const pendingSaves = new Map(); // canvas el → timeoutId
   let thumbPanelOpen = false;
+  let thumbObserver = null;
 
   const GUEST_MODE = localStorage.getItem('guestMode') === 'true';
 
@@ -817,13 +818,32 @@
     thumbPanelOpen = !thumbPanelOpen;
     thumbPanel.classList.toggle('open', thumbPanelOpen);
     if (thumbPanelOpen) await renderThumbs();
+    else stopThumbLoading();
   });
   document.getElementById('thumb-close').addEventListener('click', () => {
     thumbPanelOpen = false;
     thumbPanel.classList.remove('open');
+    stopThumbLoading();
   });
 
+  function stopThumbLoading() {
+    if (thumbObserver) {
+      thumbObserver.disconnect();
+      thumbObserver = null;
+    }
+  }
+
+  function loadThumb(idx, tctx) {
+    (pages[idx] ? Promise.resolve(pages[idx]) : dbGet(idx)).then(dataURL => {
+      if (!dataURL) return;
+      const img = new Image();
+      img.onload = () => tctx.drawImage(img, 0, 0, 100, 70);
+      img.src = dataURL;
+    });
+  }
+
   async function renderThumbs() {
+    stopThumbLoading();
     thumbList.innerHTML = '';
     const keys = await dbGetAllKeys();
     const allPages = new Set([...keys, currentPage]);
@@ -832,9 +852,20 @@
     const maxPage = sorted.length ? Math.max(...sorted) : 0;
     sorted.push(maxPage + 1);
 
+    thumbObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        thumbObserver.unobserve(entry.target);
+        const { idx, tctx } = entry.target._thumb;
+        loadThumb(idx, tctx);
+      }
+    }, { root: thumbPanel, rootMargin: '200px 0px' });
+
+    let activeItem = null;
     for (const idx of sorted) {
       const item = document.createElement('div');
       item.className = 'thumb-item' + (idx === currentPage ? ' active-thumb' : '');
+      if (idx === currentPage) activeItem = item;
 
       const tc = document.createElement('canvas');
       tc.width = 100; tc.height = 70;
@@ -849,6 +880,7 @@
       item.appendChild(tc);
       item.appendChild(numEl);
       item.addEventListener('click', async () => {
+        stopThumbLoading();
         await saveCurrentPages();
         currentPage = idx;
         if (spreadMode && currentPage % 2 === 1) currentPage++;
@@ -858,13 +890,11 @@
       });
       thumbList.appendChild(item);
 
-      (pages[idx] ? Promise.resolve(pages[idx]) : dbGet(idx)).then(dataURL => {
-        if (!dataURL) return;
-        const img = new Image();
-        img.onload = () => tctx.drawImage(img, 0, 0, 100, 70);
-        img.src = dataURL;
-      });
+      item._thumb = { idx, tctx };
+      thumbObserver.observe(item);
     }
+
+    if (activeItem) activeItem.scrollIntoView({ block: 'center' });
   }
 
   // ── Server sync ──────────────────────────────────────────
