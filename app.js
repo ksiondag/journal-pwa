@@ -841,16 +841,6 @@
       tctx.fillStyle = '#FAF7F0';
       tctx.fillRect(0, 0, 100, 70);
 
-      const dataURL = pages[idx] || await dbGet(idx);
-      if (dataURL) {
-        await new Promise(r => {
-          const img = new Image();
-          img.onload = () => { tctx.drawImage(img, 0, 0, 100, 70); r(); };
-          img.onerror = r;
-          img.src = dataURL;
-        });
-      }
-
       const numEl = document.createElement('span');
       numEl.className = 'thumb-num';
       numEl.textContent = idx + 1;
@@ -866,6 +856,13 @@
         thumbPanel.classList.remove('open');
       });
       thumbList.appendChild(item);
+
+      (pages[idx] ? Promise.resolve(pages[idx]) : dbGet(idx)).then(dataURL => {
+        if (!dataURL) return;
+        const img = new Image();
+        img.onload = () => tctx.drawImage(img, 0, 0, 100, 70);
+        img.src = dataURL;
+      });
     }
   }
 
